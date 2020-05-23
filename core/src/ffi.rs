@@ -72,15 +72,15 @@ impl ToCString for &str {
     }
 }
 
-/// Simplify dpdk FFI binding's return to a `Result` type.
+/// Simplify FFI binding's return to a `Result` type.
 ///
 /// # Example
 ///
 /// ```
-/// ffi::rte_eth_add_tx_callback(..., ..., ..., ...)
-///     .to_result(|_| {
-///         DpdkError::new()
-/// })?;
+/// unsafe {
+///     let _ = ffi::rte_eal_cleanup()
+///         .to_result(|errno| DpdkError::from_errno(errno));
+/// }
 /// ```
 pub(crate) trait ToResult {
     type Ok;

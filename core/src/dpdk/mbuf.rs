@@ -16,8 +16,8 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
-use super::MEMPOOL;
 use crate::dpdk::{DpdkError, MempoolError};
+use crate::dpdk2::MEMPOOL;
 use crate::ffi::{self, ToResult};
 use crate::packets::{Internal, Packet};
 use crate::{ensure, trace};

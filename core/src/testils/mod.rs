@@ -27,32 +27,39 @@ mod rvg;
 pub use self::packet::*;
 pub use self::rvg::*;
 
-use crate::dpdk::{self, Mempool, SocketId, MEMPOOL};
+use crate::dpdk2::{self, Mempool, SocketId, MEMPOOL};
 use crate::metrics;
 use std::ptr;
 use std::sync::Once;
-
-static TEST_INIT: Once = Once::new();
+use std::thread;
 
 /// Run once initialization of EAL for `cargo test`.
 pub fn cargo_test_init() {
+    static TEST_INIT: Once = Once::new();
+
     TEST_INIT.call_once(|| {
-        dpdk::eal_init(vec![
-            "capsule_test".to_owned(),
-            "--no-huge".to_owned(),
-            "--iova-mode=va".to_owned(),
+        dpdk2::eal_init(vec![
+            "capsule_test",
+            "--no-huge",      // allow tests to run without hugepages
+            "--iova-mode=va", // allow tests to run without root privilege
+            "--vdev",
+            "net_null0", // a null device for RX and TX tests
+            "--vdev",
+            "net_ring0", // a ring-based device that can be used with assertions
+            "--vdev",
+            "net_tap0", // a TAP device for supported device feature tests
         ])
         .unwrap();
+
         let _ = metrics::init();
     });
 }
 
-/// A handle that keeps the mempool in scope for the duration of the test. It
-/// will unset the thread-bound mempool on drop.
+/// A RAII guard that keeps the mempool in scope for the duration of the
+/// test. It will unset the thread-bound mempool on drop.
 #[derive(Debug)]
 pub struct MempoolGuard {
-    #[allow(dead_code)]
-    inner: Mempool,
+    _inner: Mempool,
 }
 
 impl Drop for MempoolGuard {
@@ -64,7 +71,8 @@ impl Drop for MempoolGuard {
 /// Creates a new mempool for test that automatically cleans up after the
 /// test completes.
 pub fn new_mempool(capacity: usize, cache_size: usize) -> MempoolGuard {
-    let mut mempool = Mempool::new(capacity, cache_size, SocketId::ANY).unwrap();
+    let name = format!("testpool-{:?}", thread::current().id());
+    let mut mempool = Mempool::new(name, capacity, cache_size, SocketId::ANY).unwrap();
     MEMPOOL.with(|tls| tls.set(mempool.raw_mut()));
-    MempoolGuard { inner: mempool }
+    MempoolGuard { _inner: mempool }
 }
