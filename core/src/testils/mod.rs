@@ -40,6 +40,10 @@ pub fn cargo_test_init() {
     TEST_INIT.call_once(|| {
         dpdk2::eal_init(vec![
             "capsule_test",
+            "-l",
+            "0-1",
+            "--master-lcore",
+            "0",
             "--no-huge",      // allow tests to run without hugepages
             "--iova-mode=va", // allow tests to run without root privilege
             "--vdev",
