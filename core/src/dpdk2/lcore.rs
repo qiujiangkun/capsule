@@ -29,7 +29,7 @@ use std::thread::Result;
 
 /// An opaque identifier for a logical execution unit of the processor.
 #[derive(Copy, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct LcoreId(raw::c_uint);
+pub(crate) struct LcoreId(pub(crate) raw::c_uint);
 
 impl LcoreId {
     /// Any lcore to indicate that no thread affinity is set.
@@ -42,13 +42,14 @@ impl LcoreId {
         unsafe { LcoreId(ffi::_rte_lcore_id()) }
     }
 
-    /// Returns the ID of the master lcore.
+    /// Returns the ID of the main lcore.
     #[inline]
-    pub(crate) fn master() -> LcoreId {
+    pub(crate) fn main() -> LcoreId {
         unsafe { LcoreId(ffi::rte_get_master_lcore()) }
     }
 
     /// Returns the ID of the physical CPU socket of the lcore.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     #[inline]
     pub(crate) fn socket(&self) -> SocketId {
         unsafe { SocketId(ffi::rte_lcore_to_socket_id(self.raw()) as raw::c_int) }
@@ -97,7 +98,7 @@ where
     0
 }
 
-/// Similar to `std::thread::JoinHandle`, used to join on a lcore execution.
+/// Similar to `std::thread::JoinHandle`, used to join on an lcore execution.
 pub(crate) struct JoinHandle<T> {
     lcore: LcoreId,
     ret: Arc<UnsafeCell<Option<Result<T>>>>,
@@ -144,7 +145,7 @@ mod tests {
 
     #[capsule::test]
     fn get_current_lcore_id_from_eal() -> Fallible<()> {
-        let lcore_id = super::spawn(LcoreId(1), || LcoreId::current())?
+        let lcore_id = super::spawn(LcoreId(1), LcoreId::current)?
             .join()
             .expect("panic!");
         assert_eq!(LcoreId(1), lcore_id);
@@ -154,13 +155,13 @@ mod tests {
 
     #[capsule::test]
     fn get_current_lcore_id_from_non_eal() {
-        let lcore_id = thread::spawn(|| LcoreId::current()).join().expect("panic!");
+        let lcore_id = thread::spawn(LcoreId::current).join().expect("panic!");
         assert_eq!(LcoreId::ANY, lcore_id);
     }
 
     #[capsule::test]
-    fn get_master_lcore_id() {
-        assert_eq!(LcoreId(0), LcoreId::master());
+    fn get_main_lcore_id() {
+        assert_eq!(LcoreId(0), LcoreId::main());
     }
 
     #[capsule::test]

@@ -23,8 +23,7 @@ mod port;
 pub(crate) use self::lcore::*;
 pub(crate) use self::mempool::*;
 pub(crate) use self::port::*;
-#[allow(unreachable_pub)]
-pub use crate::dpdk::Mbuf;
+pub(crate) use crate::dpdk::Mbuf;
 
 use crate::debug;
 use crate::ffi::{self, AsStr, ToCString, ToResult};
@@ -92,7 +91,6 @@ impl SocketId {
     pub(crate) const ANY: Self = SocketId(-1);
 
     /// Returns all the socket IDs detected on the system.
-    #[inline]
     pub(crate) fn all() -> Vec<SocketId> {
         unsafe {
             (0..ffi::rte_socket_count())
