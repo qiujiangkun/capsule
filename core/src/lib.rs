@@ -123,6 +123,7 @@ extern crate self as capsule;
 
 pub mod batch;
 pub mod config;
+pub mod config2;
 mod dpdk;
 mod dpdk2;
 mod ffi;

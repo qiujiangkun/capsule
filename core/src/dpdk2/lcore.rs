@@ -29,7 +29,7 @@ use std::thread::Result;
 
 /// An opaque identifier for a logical execution unit of the processor.
 #[derive(Copy, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct LcoreId(pub(crate) raw::c_uint);
+pub struct LcoreId(pub(crate) raw::c_uint);
 
 impl LcoreId {
     /// Any lcore to indicate that no thread affinity is set.
