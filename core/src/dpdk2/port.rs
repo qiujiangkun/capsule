@@ -324,6 +324,8 @@ impl fmt::Debug for Port {
             .field("name", &self.name())
             .field("port_id", &self.port_id())
             .field("mac_addr", &format_args!("{}", self.mac_addr()))
+            .field("rx_lcores", &self.rx_lcores)
+            .field("tx_lcores", &self.tx_lcores)
             .field("promiscuous", &self.promiscuous())
             .field("multicast", &self.multicast())
             .finish()
@@ -335,9 +337,9 @@ pub(crate) struct PortBuilder {
     name: String,
     port_id: PortId,
     rx_lcores: Vec<LcoreId>,
-    rxq_size: u16,
     tx_lcores: Vec<LcoreId>,
-    txq_size: u16,
+    rxq_capacity: u16,
+    txq_capacity: u16,
     info: ffi::rte_eth_dev_info,
     conf: ffi::rte_eth_conf,
 }
@@ -374,9 +376,9 @@ impl PortBuilder {
             name,
             port_id,
             rx_lcores: vec![],
-            rxq_size: info.rx_desc_lim.nb_min,
             tx_lcores: vec![],
-            txq_size: info.tx_desc_lim.nb_min,
+            rxq_capacity: info.rx_desc_lim.nb_min,
+            txq_capacity: info.tx_desc_lim.nb_min,
             info,
             conf: ffi::rte_eth_conf::default(),
         })
@@ -417,36 +419,40 @@ impl PortBuilder {
         Ok(self)
     }
 
-    /// Sets the ring size of each RX queue and TX queue.
+    /// Sets the capacity of each RX queue and TX queue.
     ///
     /// If the sizes are not within the limits of the device, they are adjusted
     /// to the boundaries.
-    pub(crate) fn set_rx_tx_ring_size(&mut self, rx: u16, tx: u16) -> Fallible<&mut Self> {
-        let mut rxq_size = rx;
-        let mut txq_size = tx;
+    pub(crate) fn set_rxq_txq_capacity(&mut self, rx: usize, tx: usize) -> Fallible<&mut Self> {
+        let mut rxq_capacity = rx as u16;
+        let mut txq_capacity = tx as u16;
 
         unsafe {
-            ffi::rte_eth_dev_adjust_nb_rx_tx_desc(self.port_id.raw(), &mut rxq_size, &mut txq_size)
-                .to_dpdk_result()?;
+            ffi::rte_eth_dev_adjust_nb_rx_tx_desc(
+                self.port_id.raw(),
+                &mut rxq_capacity,
+                &mut txq_capacity,
+            )
+            .to_dpdk_result()?;
         }
 
         info!(
-            cond: rxq_size != rx,
+            cond: rxq_capacity != rx as u16,
             port = ?self.name,
             before = rx,
-            after = rxq_size,
+            after = rxq_capacity,
             "rx ring size adjusted to limits.",
         );
         info!(
-            cond: txq_size != tx,
+            cond: txq_capacity != tx as u16,
             port = ?self.name,
             before = tx,
-            after = txq_size,
+            after = txq_capacity,
             "tx ring size adjusted to limits.",
         );
 
-        self.rxq_size = rxq_size;
-        self.txq_size = txq_size;
+        self.rxq_capacity = rxq_capacity;
+        self.txq_capacity = txq_capacity;
         Ok(self)
     }
 
@@ -521,7 +527,7 @@ impl PortBuilder {
                 ffi::rte_eth_rx_queue_setup(
                     self.port_id.raw(),
                     rxq_idx as u16,
-                    self.rxq_size,
+                    self.rxq_capacity,
                     socket.raw() as raw::c_uint,
                     ptr::null(),
                     mempool.raw_mut(),
@@ -536,7 +542,7 @@ impl PortBuilder {
                 ffi::rte_eth_tx_queue_setup(
                     self.port_id.raw(),
                     txq_idx as u16,
-                    self.txq_size,
+                    self.txq_capacity,
                     socket.raw() as raw::c_uint,
                     ptr::null(),
                 )
@@ -600,13 +606,13 @@ mod tests {
     }
 
     #[capsule::test]
-    fn set_rx_tx_ring_size() -> Fallible<()> {
+    fn set_rxq_txq_capacity() -> Fallible<()> {
         let mut builder = PortBuilder::new("test0", "net_ring0")?;
 
         // unfortunately can't test boundary adjustment
-        assert!(builder.set_rx_tx_ring_size(32, 32).is_ok());
-        assert_eq!(32, builder.rxq_size);
-        assert_eq!(32, builder.txq_size);
+        assert!(builder.set_rxq_txq_capacity(32, 32).is_ok());
+        assert_eq!(32, builder.rxq_capacity);
+        assert_eq!(32, builder.txq_capacity);
 
         Ok(())
     }

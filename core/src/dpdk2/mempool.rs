@@ -118,13 +118,16 @@ impl fmt::Debug for Mempool {
 
 impl Drop for Mempool {
     fn drop(&mut self) {
+        debug!(mempool = ?self.name(), "pool freed.");
         unsafe {
             ffi::rte_mempool_free(self.raw_mut());
         }
-
-        debug!(mempool = ?self.name(), "pool freed.");
     }
 }
+
+// make Mempool sharable across threads
+unsafe impl Send for Mempool {}
+unsafe impl Sync for Mempool {}
 
 thread_local! {
     /// The `Mempool` assigned to the core when the core is initialized.

@@ -137,12 +137,14 @@ pub mod packets;
 #[cfg_attr(docsrs, doc(cfg(feature = "pcap-dump")))]
 mod pcap;
 mod runtime;
+mod runtime2;
 #[cfg(any(test, feature = "testils"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "testils")))]
 pub mod testils;
 
 pub use self::dpdk::{KniRx, KniTxQueue, Mbuf, PortQueue, SizeOf};
 pub use self::runtime::{Runtime, UnixSignal};
+pub use self::runtime2::Runtime2;
 pub use capsule_macros::SizeOf;
 #[cfg(any(test, feature = "testils"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "testils")))]

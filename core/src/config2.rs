@@ -48,9 +48,12 @@
 //! [`pktdump`]: https://github.com/capsule-rs/capsule/tree/master/examples/pktdump
 
 use crate::dpdk2::LcoreId;
+use clap::{clap_app, crate_version};
+use failure::Fallible;
 use regex::Regex;
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer};
 use std::fmt;
+use std::fs;
 
 /// Runtime configuration settings.
 #[derive(Clone, Deserialize)]
@@ -280,8 +283,8 @@ pub struct PortConfig {
     #[serde(default = "default_port_txq_capacity")]
     pub txq_capacity: usize,
 
-    /// Whether promiscuous mode is enabled for this port. Defaults to `false`.
-    #[serde(default)]
+    /// Whether promiscuous mode is enabled for this port. Defaults to `true`.
+    #[serde(default = "default_promiscuous_mode")]
     pub promiscuous: bool,
 
     /// Whether multicast packet reception is enabled for this port. Defaults
@@ -296,6 +299,10 @@ fn default_port_rxq_capacity() -> usize {
 
 fn default_port_txq_capacity() -> usize {
     128
+}
+
+fn default_promiscuous_mode() -> bool {
+    true
 }
 
 fn default_multicast_mode() -> bool {
@@ -322,6 +329,25 @@ impl fmt::Debug for PortConfig {
             .field("multicast", &self.multicast)
             .finish()
     }
+}
+
+/// Loads the app config from a TOML file.
+///
+/// # Example
+///
+/// ```
+/// home$ ./myapp -f config.toml
+/// ```
+pub fn load_config() -> Fallible<RuntimeConfig> {
+    let matches = clap_app!(capsule =>
+        (version: crate_version!())
+        (@arg file: -f --file +required +takes_value "configuration file")
+    )
+    .get_matches();
+
+    let path = matches.value_of("file").unwrap();
+    let content = fs::read_to_string(path)?;
+    toml::from_str(&content).map_err(|err| err.into())
 }
 
 // make `LcoreId` serde deserializable.
@@ -363,7 +389,7 @@ mod tests {
         assert_eq!(None, config.ports[0].tx_core);
         assert_eq!(default_port_rxq_capacity(), config.ports[0].rxq_capacity);
         assert_eq!(default_port_txq_capacity(), config.ports[0].txq_capacity);
-        assert_eq!(false, config.ports[0].promiscuous);
+        assert_eq!(default_promiscuous_mode(), config.ports[0].promiscuous);
         assert_eq!(default_multicast_mode(), config.ports[0].multicast);
     }
 
