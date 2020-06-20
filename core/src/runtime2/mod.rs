@@ -16,13 +16,17 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
+mod shutdown;
+
+use self::shutdown::Shutdown;
 use crate::config2::RuntimeConfig;
-use crate::dpdk2::{self, LcoreId, Mempool, Port, PortBuilder};
+use crate::dpdk2::{self, JoinHandle, LcoreId, Mempool, Port, PortBuilder};
 use crate::{debug, info};
 use failure::Fallible;
 use std::collections::HashMap;
 use std::fmt;
 use std::mem::ManuallyDrop;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The Capsule runtime.
 ///
@@ -84,7 +88,38 @@ impl Runtime2 {
 
     /// Starts the runtime execution.
     pub fn execute(self) -> Fallible<RuntimeGuard> {
-        Ok(RuntimeGuard { runtime: self })
+        let mut handles = Vec::new();
+        let (shutdown, wait) = Shutdown::new();
+        static STARTED: AtomicUsize = AtomicUsize::new(0);
+
+        for id in LcoreId::iter(true) {
+            let shutdown = wait.clone();
+            let handle = dpdk2::spawn(id, move || {
+                smol::run(
+                    async move {
+                        let lcore = LcoreId::current();
+                        debug!(?lcore, "starting core.");
+
+                        // marks the lcore as started.
+                        STARTED.fetch_add(1, Ordering::Relaxed);
+                        debug!(?lcore, "core started.");
+
+                        shutdown.wait().await;
+                        debug!(?lcore, "core shut down.");
+                    },
+                )
+            })?;
+            handles.push(handle);
+        }
+
+        // waits for all the lcores to start.
+        while STARTED.load(Ordering::Relaxed) != handles.len() {}
+
+        Ok(RuntimeGuard {
+            runtime: self,
+            lcores: handles,
+            shutdown,
+        })
     }
 }
 
@@ -98,22 +133,35 @@ impl fmt::Debug for Runtime2 {
     }
 }
 
-/// The RAII guard to cleanup the runtime resources on drop.
+/// The RAII guard to stop and cleanup the runtime resources on drop.
 pub struct RuntimeGuard {
     runtime: Runtime2,
+    lcores: Vec<JoinHandle<()>>,
+    shutdown: Shutdown,
 }
 
 impl Drop for RuntimeGuard {
+    #[allow(clippy::cognitive_complexity)]
     fn drop(&mut self) {
-        // the default rust drop order is self before fields, which is the wrong
-        // order for what EAL needs. To control the order, we manually drop some
-        // fields first.
-        unsafe {
-            ManuallyDrop::drop(&mut self.runtime.mempool);
+        info!("shutting down runtime...");
+
+        // triggers the shutdown of all running lcores.
+        self.shutdown.signal();
+
+        for lcore in self.lcores.drain(..) {
+            // waiting on each lcore to finish shutting down.
+            let _ = lcore.join();
         }
 
+        // the default rust drop order is self before fields, which is the wrong
+        // order for what we need. To control the order, we manually drop some
+        // fields first.
         for (_, port) in self.runtime.ports.drain() {
             port.close();
+        }
+
+        unsafe {
+            ManuallyDrop::drop(&mut self.runtime.mempool);
         }
 
         debug!("freeing EAL...");
@@ -124,6 +172,6 @@ impl Drop for RuntimeGuard {
 
 impl fmt::Debug for RuntimeGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RuntimeGuard").finish()
+        write!(f, "RuntimeGuard")
     }
 }

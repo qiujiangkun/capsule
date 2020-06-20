@@ -105,9 +105,8 @@ pub struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    fn all_cores(&self) -> Vec<LcoreId> {
+    fn other_cores(&self) -> Vec<LcoreId> {
         let mut cores = vec![];
-        cores.push(self.main_core);
         cores.extend(self.cores.iter());
 
         self.ports.iter().for_each(|port| {
@@ -162,18 +161,30 @@ impl RuntimeConfig {
             }
         });
 
+        let mut main = self.main_core;
+        let others = self.other_cores();
+
+        // if the main lcore is also used for other tasks, we will assign
+        // another lcore to be the main, and set the affinity to the same
+        // physical core/cpu. this is necessary because we need to be able
+        // to run an executor for other tasks without blocking the main
+        // application thread.
+        if others.contains(&main) {
+            main = LcoreId::LAST;
+        }
+
         // adds the main core.
         eal_args.push("--master-lcore".to_owned());
-        eal_args.push(self.main_core.raw().to_string());
+        eal_args.push(main.raw().to_string());
 
         // adds all the lcores.
-        let cores = self
-            .all_cores()
+        let mut cores = others
             .into_iter()
             .map(|lcore| lcore.raw().to_string())
             .collect::<Vec<_>>()
             .join(",");
-        eal_args.push("-l".to_owned());
+        cores.push_str(&format!(",{}@{}", main.raw(), self.main_core.raw()));
+        eal_args.push("--lcores".to_owned());
         eal_args.push(cores);
 
         // adds additional DPDK args.
@@ -438,9 +449,9 @@ mod tests {
                 "--vdev",
                 "net_pcap0,rx=lo,tx=lo",
                 "--master-lcore",
-                "0",
-                "-l",
-                "0,1,2,3,4",
+                "127",
+                "--lcores",
+                "0,1,2,3,4,127@0",
                 "-v",
                 "--log-level",
                 "eal:8"

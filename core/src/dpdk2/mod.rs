@@ -90,19 +90,6 @@ impl SocketId {
     /// A socket ID representing any NUMA socket.
     pub(crate) const ANY: Self = SocketId(-1);
 
-    /// Returns all the socket IDs detected on the system.
-    pub(crate) fn all() -> Vec<SocketId> {
-        unsafe {
-            (0..ffi::rte_socket_count())
-                .map(|idx| ffi::rte_socket_id_by_idx(idx).to_dpdk_result())
-                .filter_map(|res| match res {
-                    Ok(id) => Some(SocketId(id as raw::c_int)),
-                    Err(_) => None,
-                })
-                .collect::<Vec<_>>()
-        }
-    }
-
     /// Returns the raw value needed for FFI calls.
     #[allow(clippy::trivially_copy_pass_by_ref)]
     #[inline]
@@ -155,14 +142,4 @@ fn eth_macaddr_get(port_id: u16) -> Fallible<MacAddr> {
         ffi::rte_eth_macaddr_get(port_id, &mut addr).to_dpdk_result()?;
     }
     Ok(addr.addr_bytes.into())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[capsule::test]
-    fn get_all_sockets() {
-        assert!(!SocketId::all().is_empty());
-    }
 }

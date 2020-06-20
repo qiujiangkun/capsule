@@ -35,6 +35,9 @@ impl LcoreId {
     /// Any lcore to indicate that no thread affinity is set.
     pub(crate) const ANY: Self = LcoreId(raw::c_uint::MAX);
 
+    /// The last valid lcore.
+    pub(crate) const LAST: Self = LcoreId(ffi::RTE_MAX_LCORE - 1);
+
     /// Returns the ID of the current execution unit or `LcoreId::ANY` when
     /// called from a non-EAL thread.
     #[inline]
@@ -46,6 +49,18 @@ impl LcoreId {
     #[inline]
     pub(crate) fn main() -> LcoreId {
         unsafe { LcoreId(ffi::rte_get_master_lcore()) }
+    }
+
+    /// Returns the number of enabled lcores on the system.
+    #[inline]
+    pub(crate) fn len() -> usize {
+        unsafe { ffi::rte_lcore_count() as usize }
+    }
+
+    /// Returns an iterator over all the enabled lcores.
+    #[inline]
+    pub(crate) fn iter(skip_main: bool) -> LcoreIter {
+        LcoreIter::new(skip_main)
     }
 
     /// Returns the ID of the physical CPU socket of the lcore.
@@ -66,6 +81,35 @@ impl LcoreId {
 impl fmt::Debug for LcoreId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "lcore{}", self.0)
+    }
+}
+
+/// An iterator that iterates through all the available lcores.
+pub(crate) struct LcoreIter {
+    current: raw::c_uint,
+    skip_main: raw::c_int,
+}
+
+impl LcoreIter {
+    /// Creates a new lcore iterator.
+    pub(crate) fn new(skip_main: bool) -> Self {
+        LcoreIter {
+            // starts at u32 max and let `rte_get_next_lcore` wraps around to 0.
+            current: raw::c_uint::MAX,
+            skip_main: if skip_main { 1 } else { 0 },
+        }
+    }
+}
+
+impl Iterator for LcoreIter {
+    type Item = LcoreId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.current = unsafe { ffi::rte_get_next_lcore(self.current, self.skip_main, 0) };
+        match self.current {
+            ffi::RTE_MAX_LCORE => None,
+            _ => Some(LcoreId(self.current)),
+        }
     }
 }
 
@@ -162,6 +206,20 @@ mod tests {
     #[capsule::test]
     fn get_main_lcore_id() {
         assert_eq!(LcoreId(0), LcoreId::main());
+    }
+
+    #[capsule::test]
+    fn get_lcore_len() {
+        assert_eq!(2, LcoreId::len());
+    }
+
+    #[capsule::test]
+    fn iterate_lcores() {
+        let n = LcoreId::iter(false).count();
+        assert_eq!(LcoreId::len(), n);
+
+        let n = LcoreId::iter(true).count();
+        assert_eq!(LcoreId::len() - 1, n);
     }
 
     #[capsule::test]

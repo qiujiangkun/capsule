@@ -365,7 +365,7 @@ impl PortBuilder {
         }
 
         let port_id = PortId(port_id);
-        debug!(port = ?name, "{:?} is {}.", port_id, device);
+        debug!(port = ?name, id = ?port_id, ?device);
 
         let mut info = ffi::rte_eth_dev_info::default();
         unsafe {
