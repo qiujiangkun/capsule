@@ -16,11 +16,24 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
-use capsule::config::load_config;
-use capsule::Runtime;
+use capsule::config2::load_config;
+use capsule::Runtime2;
 use failure::Fallible;
-use tracing::{debug, Level};
+use futures::prelude::*;
+use signal_hook::{self, pipe};
+use smol::{self, Async};
+use std::os::unix::net::UnixStream;
+use tracing::{debug, info, Level};
 use tracing_subscriber::fmt;
+
+async fn ctrl_c() -> Fallible<()> {
+    let (mut read, write) = Async::<UnixStream>::pair()?;
+    pipe::register(signal_hook::SIGINT, write)?;
+    info!("ctrl-c to quit.");
+
+    read.read_exact(&mut [0]).await?;
+    Ok(())
+}
 
 fn main() -> Fallible<()> {
     let subscriber = fmt::Subscriber::builder()
@@ -31,5 +44,15 @@ fn main() -> Fallible<()> {
     let config = load_config()?;
     debug!(?config);
 
-    Runtime::build(config)?.execute()
+    let guard = Runtime2::from_config(config)?.execute()?;
+
+    smol::block_on(
+        async {
+            let _ = ctrl_c().await;
+        },
+    );
+
+    drop(guard);
+
+    Ok(())
 }
