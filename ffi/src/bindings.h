@@ -21,6 +21,7 @@
 
 // all the necessary DPDK functions, types and constants are defined
 // in the following header files.
+#include <rte_distributor.h>
 #include <rte_eal.h>
 #include <rte_errno.h>
 #include <rte_ethdev.h>

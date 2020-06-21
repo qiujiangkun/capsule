@@ -877,6 +877,77 @@ pub const RTE_ETH_TX_DESC_DONE: u32 = 1;
 pub const RTE_ETH_TX_DESC_UNAVAIL: u32 = 2;
 pub const RTE_CLASS_ANY_ID: u32 = 16777215;
 pub const RTE_KNI_NAMESIZE: u32 = 16;
+pub mod rte_distributor_alg_type {
+    pub type Type = u32;
+    pub const RTE_DIST_ALG_BURST: Type = 0;
+    pub const RTE_DIST_ALG_SINGLE: Type = 1;
+    pub const RTE_DIST_NUM_ALG_TYPES: Type = 2;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rte_distributor {
+    _unused: [u8; 0],
+}
+extern "C" {
+    pub fn rte_distributor_create(
+        name: *const ::std::os::raw::c_char,
+        socket_id: ::std::os::raw::c_uint,
+        num_workers: ::std::os::raw::c_uint,
+        alg_type: ::std::os::raw::c_uint,
+    ) -> *mut rte_distributor;
+}
+extern "C" {
+    pub fn rte_distributor_process(
+        d: *mut rte_distributor,
+        mbufs: *mut *mut rte_mbuf,
+        num_mbufs: ::std::os::raw::c_uint,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn rte_distributor_returned_pkts(
+        d: *mut rte_distributor,
+        mbufs: *mut *mut rte_mbuf,
+        max_mbufs: ::std::os::raw::c_uint,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn rte_distributor_flush(d: *mut rte_distributor) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn rte_distributor_clear_returns(d: *mut rte_distributor);
+}
+extern "C" {
+    pub fn rte_distributor_get_pkt(
+        d: *mut rte_distributor,
+        worker_id: ::std::os::raw::c_uint,
+        pkts: *mut *mut rte_mbuf,
+        oldpkt: *mut *mut rte_mbuf,
+        retcount: ::std::os::raw::c_uint,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn rte_distributor_return_pkt(
+        d: *mut rte_distributor,
+        worker_id: ::std::os::raw::c_uint,
+        oldpkt: *mut *mut rte_mbuf,
+        num: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn rte_distributor_request_pkt(
+        d: *mut rte_distributor,
+        worker_id: ::std::os::raw::c_uint,
+        oldpkt: *mut *mut rte_mbuf,
+        count: ::std::os::raw::c_uint,
+    );
+}
+extern "C" {
+    pub fn rte_distributor_poll_pkt(
+        d: *mut rte_distributor,
+        worker_id: ::std::os::raw::c_uint,
+        mbufs: *mut *mut rte_mbuf,
+    ) -> ::std::os::raw::c_int;
+}
 pub type __u_char = ::std::os::raw::c_uchar;
 pub type __u_short = ::std::os::raw::c_ushort;
 pub type __u_int = ::std::os::raw::c_uint;

@@ -40,8 +40,8 @@ pub fn cargo_test_init() {
     TEST_INIT.call_once(|| {
         dpdk2::eal_init(vec![
             "capsule_test",
-            "-l",
-            "0-1",
+            "--lcores",
+            "0,1,2@0", // multiple lcores pinned to the same physical core
             "--master-lcore",
             "0",
             "--no-huge",      // allow tests to run without hugepages

@@ -210,7 +210,7 @@ mod tests {
 
     #[capsule::test]
     fn get_lcore_len() {
-        assert_eq!(2, LcoreId::len());
+        assert_eq!(3, LcoreId::len());
     }
 
     #[capsule::test]
