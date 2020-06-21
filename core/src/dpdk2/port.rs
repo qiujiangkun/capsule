@@ -16,14 +16,15 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
-use super::{LcoreId, Mbuf, Mempool, SocketId, ToDpdkResult};
+use super::{LcoreId, Mempool, SocketId, ToDpdkResult};
 use crate::ffi::{self, ToCString};
 use crate::net::MacAddr;
 use crate::{debug, ensure, info, warn};
 use failure::{Fail, Fallible};
+use std::collections::HashMap;
 use std::fmt;
 use std::os::raw;
-use std::ptr;
+use std::ptr::{self, NonNull};
 
 /// An opaque identifier for a PMD device port.
 #[derive(Copy, Clone)]
@@ -67,23 +68,11 @@ impl RxQueueIndex {
 pub(crate) struct PortRxQueue {
     port: PortId,
     index: RxQueueIndex,
-    // hack to make the type !Send and !Sync
-    #[cfg(not(feature = "negative_impls"))]
-    _phantom: std::marker::PhantomData<*const ()>,
 }
 
 impl PortRxQueue {
-    fn new(port: PortId, index: RxQueueIndex) -> PortRxQueue {
-        PortRxQueue {
-            port,
-            index,
-            #[cfg(not(feature = "negative_impls"))]
-            _phantom: Default::default(),
-        }
-    }
-
     /// Receives a burst of Mbufs to fill the packets buffer.
-    pub(crate) fn receive(&self, packets: &mut Vec<Mbuf>) {
+    pub(crate) fn receive(&self, packets: &mut Vec<NonNull<ffi::rte_mbuf>>) {
         let max = packets.capacity();
 
         unsafe {
@@ -109,12 +98,6 @@ impl fmt::Debug for PortRxQueue {
     }
 }
 
-#[cfg(feature = "negative_impls")]
-impl !Send for PortRxQueue {}
-
-#[cfg(feature = "negative_impls")]
-impl !Sync for PortRxQueue {}
-
 /// A transmit queue index.
 #[derive(Copy, Clone)]
 struct TxQueueIndex(u16);
@@ -132,23 +115,11 @@ impl TxQueueIndex {
 pub(crate) struct PortTxQueue {
     port: PortId,
     index: TxQueueIndex,
-    // hack to make the type !Send and !Sync
-    #[cfg(not(feature = "negative_impls"))]
-    _phantom: std::marker::PhantomData<*const ()>,
 }
 
 impl PortTxQueue {
-    fn new(port: PortId, index: TxQueueIndex) -> PortTxQueue {
-        PortTxQueue {
-            port,
-            index,
-            #[cfg(not(feature = "negative_impls"))]
-            _phantom: Default::default(),
-        }
-    }
-
     /// Transmits the packets in the buffer.
-    pub(crate) fn transmit(&self, packets: &mut Vec<Mbuf>) {
+    pub(crate) fn transmit(&self, packets: &mut Vec<NonNull<ffi::rte_mbuf>>) {
         let mut to_send = packets.len();
         let mut ptrs = packets.as_mut_ptr() as *mut *mut ffi::rte_mbuf;
 
@@ -169,16 +140,21 @@ impl PortTxQueue {
         }
 
         if to_send > 0 {
-            // tx queue is full and we can't make progress, start dropping packets
-            // to avoid potentially stuck in an endless loop.
-            let start = packets.len() - to_send;
-            let drops = packets.drain(start..);
-            Mbuf::free_bulk(drops);
+            // tx queue is full and we can't make progress, start dropping
+            // packets to avoid potentially stuck in an endless loop.
+            unsafe {
+                let pool = (*(*ptrs)).pool;
+                ffi::_rte_mempool_put_bulk(
+                    pool,
+                    ptrs as *const *mut core::ffi::c_void,
+                    to_send as raw::c_uint,
+                );
+            }
         }
 
         unsafe {
-            // ownership of the packets are given to `rte_eth_tx_burst`, we will
-            // mark the packets buffer empty.
+            // the mbufs are either given to `rte_eth_tx_burst` or bulk
+            // freed. we will mark the packets buffer empty.
             packets.set_len(0);
         }
     }
@@ -193,19 +169,9 @@ impl fmt::Debug for PortTxQueue {
     }
 }
 
-#[cfg(feature = "negative_impls")]
-impl !Send for PortTxQueue {}
-
-#[cfg(feature = "negative_impls")]
-impl !Sync for PortTxQueue {}
-
 /// Port related errors.
 #[derive(Debug, Fail)]
 pub(crate) enum PortError {
-    /// The RX or TX queue for an lcore is not bound.
-    #[fail(display = "Port RX or TX queue for {:?} not found.", _0)]
-    QueueNotFound(LcoreId),
-
     /// The maximum number of RX queues is less than the number of queues
     /// requested.
     #[fail(display = "Insufficient number of RX queues. Max is {}.", _0)]
@@ -215,6 +181,9 @@ pub(crate) enum PortError {
     /// requested.
     #[fail(display = "Insufficient number of TX queues. Max is {}.", _0)]
     InsufficientTxQueues(usize),
+
+    #[fail(display = "Worker offload mode only supports one RX lcore.")]
+    TooManyRxLcores,
 }
 
 /// A PMD device port.
@@ -223,6 +192,7 @@ pub(crate) struct Port {
     port_id: PortId,
     rx_lcores: Vec<LcoreId>,
     tx_lcores: Vec<LcoreId>,
+    use_workers: bool,
 }
 
 impl Port {
@@ -237,6 +207,11 @@ impl Port {
     /// Returns the port ID.
     pub(crate) fn port_id(&self) -> PortId {
         self.port_id
+    }
+
+    /// Returns whether to offload packet processing to worker lcores.
+    pub(crate) fn use_workers(&self) -> bool {
+        self.use_workers
     }
 
     /// Returns the MAC address of the port.
@@ -263,22 +238,38 @@ impl Port {
         }
     }
 
-    /// Returns the RX queue for the current lcore.
-    pub(crate) fn get_rxq(&self) -> Fallible<PortRxQueue> {
-        let lcore = LcoreId::current();
-        match self.rx_lcores.iter().position(|&x| x == lcore) {
-            Some(index) => Ok(PortRxQueue::new(self.port_id, RxQueueIndex(index as u16))),
-            None => Err(PortError::QueueNotFound(lcore).into()),
-        }
+    /// Returns the RX queues.
+    pub(crate) fn get_rxqs(&self) -> HashMap<LcoreId, PortRxQueue> {
+        self.rx_lcores
+            .iter()
+            .enumerate()
+            .map(|(index, &lcore)| {
+                (
+                    lcore,
+                    PortRxQueue {
+                        port: self.port_id,
+                        index: RxQueueIndex(index as u16),
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>()
     }
 
-    /// Returns the TX queue for the current lcore.
-    pub(crate) fn get_txq(&self) -> Fallible<PortTxQueue> {
-        let lcore = LcoreId::current();
-        match self.tx_lcores.iter().position(|&x| x == lcore) {
-            Some(index) => Ok(PortTxQueue::new(self.port_id, TxQueueIndex(index as u16))),
-            None => Err(PortError::QueueNotFound(lcore).into()),
-        }
+    /// Returns the TX queues.
+    pub(crate) fn get_txqs(&self) -> HashMap<LcoreId, PortTxQueue> {
+        self.tx_lcores
+            .iter()
+            .enumerate()
+            .map(|(index, &lcore)| {
+                (
+                    lcore,
+                    PortTxQueue {
+                        port: self.port_id,
+                        index: TxQueueIndex(index as u16),
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>()
     }
 
     /// Starts the port. This is the final step before packets can be
@@ -326,6 +317,7 @@ impl fmt::Debug for Port {
             .field("mac_addr", &format_args!("{}", self.mac_addr()))
             .field("rx_lcores", &self.rx_lcores)
             .field("tx_lcores", &self.tx_lcores)
+            .field("use_workers", &self.use_workers())
             .field("promiscuous", &self.promiscuous())
             .field("multicast", &self.multicast())
             .finish()
@@ -338,6 +330,7 @@ pub(crate) struct PortBuilder {
     port_id: PortId,
     rx_lcores: Vec<LcoreId>,
     tx_lcores: Vec<LcoreId>,
+    use_workers: bool,
     rxq_capacity: u16,
     txq_capacity: u16,
     info: ffi::rte_eth_dev_info,
@@ -377,6 +370,7 @@ impl PortBuilder {
             port_id,
             rx_lcores: vec![],
             tx_lcores: vec![],
+            use_workers: false,
             rxq_capacity: info.rx_desc_lim.nb_min,
             txq_capacity: info.tx_desc_lim.nb_min,
             info,
@@ -386,14 +380,23 @@ impl PortBuilder {
 
     /// Sets the lcores to receive packets on.
     ///
-    /// If more than one lcore is used, also enables receive side scaling.
-    pub(crate) fn set_rx_lcores(&mut self, lcores: Vec<LcoreId>) -> Fallible<&mut Self> {
+    /// Enables receive side scaling if more than one lcore is used for RX or
+    /// packet processing is offloaded to the workers.
+    pub(crate) fn set_rx_lcores(
+        &mut self,
+        lcores: Vec<LcoreId>,
+        use_workers: bool,
+    ) -> Fallible<&mut Self> {
         ensure!(
             !lcores.is_empty() && self.info.max_rx_queues >= lcores.len() as u16,
             PortError::InsufficientRxQueues(self.info.max_rx_queues as usize)
         );
+        ensure!(
+            !use_workers || lcores.len() == 1,
+            PortError::TooManyRxLcores
+        );
 
-        if lcores.len() > 1 {
+        if lcores.len() > 1 || use_workers {
             const RSS_HF: u64 =
                 (ffi::ETH_RSS_IP | ffi::ETH_RSS_TCP | ffi::ETH_RSS_UDP | ffi::ETH_RSS_SCTP) as u64;
 
@@ -405,6 +408,7 @@ impl PortBuilder {
         }
 
         self.rx_lcores = lcores;
+        self.use_workers = use_workers;
         Ok(self)
     }
 
@@ -555,6 +559,7 @@ impl PortBuilder {
             port_id: self.port_id,
             rx_lcores: self.rx_lcores.clone(),
             tx_lcores: self.tx_lcores.clone(),
+            use_workers: self.use_workers,
         })
     }
 }
@@ -563,7 +568,6 @@ impl PortBuilder {
 mod tests {
     use super::*;
     use capsule::dpdk2;
-    use std::sync::Arc;
 
     #[capsule::test]
     fn get_port_socket() {
@@ -581,11 +585,17 @@ mod tests {
 
         // ring port has a max rxq of 16.
         let lcores = (0..17).map(LcoreId).collect::<Vec<_>>();
-        assert!(builder.set_rx_lcores(lcores).is_err());
+        assert!(builder.set_rx_lcores(lcores, false).is_err());
 
         let lcores = (0..16).map(LcoreId).collect::<Vec<_>>();
-        assert!(builder.set_rx_lcores(lcores.clone()).is_ok());
+        assert!(builder.set_rx_lcores(lcores.clone(), false).is_ok());
         assert_eq!(lcores, builder.rx_lcores);
+
+        // worker offload mode only supports one RX lcore
+        assert!(builder.set_rx_lcores(lcores, true).is_err());
+
+        assert!(builder.set_rx_lcores(vec![LcoreId(0)], true).is_ok());
+        assert_eq!(vec![LcoreId(0)], builder.rx_lcores);
 
         Ok(())
     }
@@ -643,7 +653,7 @@ mod tests {
         let tx_lcores = (3..6).map(LcoreId).collect::<Vec<_>>();
         let mut pool = Mempool::new("mp_build_port", 15, 0, SocketId::ANY)?;
         let port = PortBuilder::new("test0", "net_ring0")?
-            .set_rx_lcores(rx_lcores.clone())?
+            .set_rx_lcores(rx_lcores.clone(), false)?
             .set_tx_lcores(tx_lcores.clone())?
             .finish(&mut pool)?;
 
@@ -657,46 +667,19 @@ mod tests {
     }
 
     #[capsule::test]
-    fn rxq_not_found() -> Fallible<()> {
-        let mut pool = Mempool::new("mp_rxq_not_found", 15, 0, SocketId::ANY)?;
-        let port = PortBuilder::new("test0", "net_ring0")?
-            .set_rx_lcores(vec![LcoreId(1)])?
-            .finish(&mut pool)?;
-
-        assert!(port.get_rxq().is_err());
-
-        Ok(())
-    }
-
-    #[capsule::test]
-    fn txq_not_found() -> Fallible<()> {
-        let mut pool = Mempool::new("mp_txq_not_found", 15, 0, SocketId::ANY)?;
-        let port = PortBuilder::new("test0", "net_ring0")?
-            .set_tx_lcores(vec![LcoreId(1)])?
-            .finish(&mut pool)?;
-
-        assert!(port.get_txq().is_err());
-
-        Ok(())
-    }
-
-    #[capsule::test]
     fn port_rx_tx() -> Fallible<()> {
         let lcore = LcoreId(1);
         let mut pool = Mempool::new("mp_port_rx_tx", 15, 0, SocketId::ANY)?;
         let port = PortBuilder::new("test0", "net_null0")?
-            .set_rx_lcores(vec![lcore])?
+            .set_rx_lcores(vec![lcore], true)?
             .set_tx_lcores(vec![lcore])?
             .finish(&mut pool)?;
-        let port = Arc::new(port);
 
         port.start()?;
 
-        let handle = port.clone();
+        let rxq = port.get_rxqs().remove(&lcore).unwrap();
+        let txq = port.get_txqs().remove(&lcore).unwrap();
         dpdk2::spawn(lcore, move || {
-            let rxq = handle.get_rxq().unwrap();
-            let txq = handle.get_txq().unwrap();
-
             let mut packets = Vec::with_capacity(4);
             assert_eq!(0, packets.len());
 

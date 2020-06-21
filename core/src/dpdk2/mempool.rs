@@ -86,7 +86,7 @@ impl Mempool {
         self.raw().name[..].as_str()
     }
 
-    /// Returns the maximum number of Mbufs in the pool.
+    /// Returns the maximum number of mbufs in the pool.
     #[inline]
     pub(crate) fn capacity(&self) -> usize {
         self.raw().size as usize

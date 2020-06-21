@@ -64,8 +64,8 @@ impl Runtime2 {
                 .set_promiscuous(pconf.promiscuous)?
                 .set_multicast(pconf.multicast)?;
 
-            if let Some(rx_core) = pconf.rx_core {
-                builder.set_rx_lcores(vec![rx_core])?;
+            if !pconf.rx_cores.is_empty() {
+                builder.set_rx_lcores(pconf.rx_cores.clone(), pconf.use_workers)?;
             }
             if let Some(tx_core) = pconf.tx_core {
                 builder.set_tx_lcores(vec![tx_core])?;
@@ -82,7 +82,7 @@ impl Runtime2 {
         Ok(Runtime2 {
             mempool: ManuallyDrop::new(mempool),
             ports,
-            worker_cores: config.cores,
+            worker_cores: config.worker_cores,
         })
     }
 

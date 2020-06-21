@@ -81,11 +81,9 @@ pub struct RuntimeConfig {
     /// will run on.
     pub main_core: LcoreId,
 
-    /// Additional cores that are available to the application, and can be
-    /// used for running general tasks. Packet pipelines cannot be run on
-    /// these cores unless the core is also assigned to a port separately.
-    /// Defaults to empty list.
-    pub cores: Vec<LcoreId>,
+    /// Worker cores used for packet processing and general async task
+    /// execution.
+    pub worker_cores: Vec<LcoreId>,
 
     /// Per mempool settings. On a system with multiple sockets, aka NUMA
     /// nodes, one mempool will be allocated for each socket the apllication
@@ -107,11 +105,11 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     fn other_cores(&self) -> Vec<LcoreId> {
         let mut cores = vec![];
-        cores.extend(self.cores.iter());
+        cores.extend(&self.worker_cores);
 
         self.ports.iter().for_each(|port| {
-            if let Some(rx_core) = port.rx_core {
-                cores.push(rx_core);
+            if !port.rx_cores.is_empty() {
+                cores.extend(&port.rx_cores);
             }
             if let Some(tx_core) = port.tx_core {
                 cores.push(tx_core);
@@ -206,7 +204,7 @@ impl fmt::Debug for RuntimeConfig {
                 self.app_group.as_ref().unwrap_or(&self.app_name),
             )
             .field("main_core", &self.main_core)
-            .field("cores", &self.cores)
+            .field("worker_cores", &self.worker_cores)
             .field("mempool", &self.mempool)
             .field("ports", &self.ports);
         if let Some(dpdk_args) = &self.dpdk_args {
@@ -278,13 +276,20 @@ pub struct PortConfig {
     #[serde(default)]
     pub args: Option<String>,
 
-    /// The lcore to receive packets on.
+    /// The lcores to receive packets on. When no lcore specified, the port
+    /// will be TX only.
     #[serde(default)]
-    pub rx_core: Option<LcoreId>,
+    pub rx_cores: Vec<LcoreId>,
 
-    /// The lcore to transmit packets on.
+    /// The lcore to transmit packets on. When no lcore specified, the port
+    /// will be RX only.
     #[serde(default)]
     pub tx_core: Option<LcoreId>,
+
+    /// Whether to offload the packet processing to worker cores. When set to
+    /// `true`, `rx_cores` must be exactly one lcore. Defaults to `false`.
+    #[serde(default)]
+    pub use_workers: bool,
 
     /// The receive queue capacity. Defaults to `128`.
     #[serde(default = "default_port_rxq_capacity")]
@@ -328,13 +333,14 @@ impl fmt::Debug for PortConfig {
         if let Some(args) = &self.args {
             d.field("args", args);
         }
-        if let Some(rx_core) = &self.rx_core {
-            d.field("rx_core", rx_core);
+        if !self.rx_cores.is_empty() {
+            d.field("rx_cores", &self.rx_cores);
         }
         if let Some(tx_core) = &self.tx_core {
             d.field("tx_core", tx_core);
         }
-        d.field("rxq_capacity", &self.rxq_capacity)
+        d.field("use_workers", &self.use_workers)
+            .field("rxq_capacity", &self.rxq_capacity)
             .field("txq_capacity", &self.txq_capacity)
             .field("promiscuous", &self.promiscuous)
             .field("multicast", &self.multicast)
@@ -381,7 +387,7 @@ mod tests {
         const CONFIG: &str = r#"
             app_name = "myapp"
             main_core = 0
-            cores = [1, 2]
+            worker_cores = [1, 2]
 
             [[ports]]
                 name = "eth0"
@@ -396,8 +402,9 @@ mod tests {
         assert_eq!(default_capacity(), config.mempool.capacity);
         assert_eq!(default_cache_size(), config.mempool.cache_size);
         assert_eq!(None, config.ports[0].args);
-        assert_eq!(None, config.ports[0].rx_core);
+        assert_eq!(Vec::<LcoreId>::new(), config.ports[0].rx_cores);
         assert_eq!(None, config.ports[0].tx_core);
+        assert_eq!(false, config.ports[0].use_workers);
         assert_eq!(default_port_rxq_capacity(), config.ports[0].rxq_capacity);
         assert_eq!(default_port_txq_capacity(), config.ports[0].txq_capacity);
         assert_eq!(default_promiscuous_mode(), config.ports[0].promiscuous);
@@ -411,7 +418,7 @@ mod tests {
             secondary = false
             app_group = "mygroup"
             main_core = 0
-            cores = [1, 2]
+            worker_cores = [1, 2]
             dpdk_args = "-v --log-level eal:8"
 
             [mempool]
@@ -421,17 +428,17 @@ mod tests {
             [[ports]]
                 name = "eth0"
                 device = "0000:00:01.0"
-                rx_core = 3
-                rxq_capacity = 32
+                rx_cores = [3]
                 tx_core = 0
+                rxq_capacity = 32
                 txq_capacity = 32
 
             [[ports]]
                 name = "eth1"
                 device = "net_pcap0"
                 args = "rx=lo,tx=lo"
-                rxq_capacity = 32
                 tx_core = 4
+                rxq_capacity = 32
                 txq_capacity = 32
         "#;
 
