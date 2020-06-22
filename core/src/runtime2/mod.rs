@@ -16,17 +16,20 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
+mod completion;
 mod shutdown;
 
+use self::completion::CompletionRx;
 use self::shutdown::Shutdown;
 use crate::config2::RuntimeConfig;
-use crate::dpdk2::{self, JoinHandle, LcoreId, Mempool, Port, PortBuilder};
+use crate::dpdk2::{self, JoinHandle, LcoreId, Mbuf, Mempool, Port, PortBuilder};
 use crate::{debug, info};
 use failure::Fallible;
 use std::collections::HashMap;
 use std::fmt;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// The Capsule runtime.
 ///
@@ -36,6 +39,7 @@ pub struct Runtime2 {
     mempool: ManuallyDrop<Mempool>,
     ports: HashMap<String, Port>,
     worker_cores: Vec<LcoreId>,
+    pipelines: HashMap<String, Arc<dyn Fn(Mbuf) -> Fallible<()> + Send + Sync + 'static>>,
 }
 
 impl Runtime2 {
@@ -83,37 +87,93 @@ impl Runtime2 {
             mempool: ManuallyDrop::new(mempool),
             ports,
             worker_cores: config.worker_cores,
+            pipelines: HashMap::new(),
         })
+    }
+
+    /// Sets the pipeline for a port identified by its logical name.
+    pub fn set_port_pipeline<S, F>(mut self, port: S, pipeline: F) -> Self
+    where
+        S: Into<String>,
+        F: Fn(Mbuf) -> Fallible<()> + Send + Sync + 'static,
+    {
+        let port = port.into();
+        self.pipelines.insert(port, Arc::new(pipeline));
+        self
+    }
+
+    fn bootstrap_tasks(&self) -> HashMap<LcoreId, Vec<BootstrapTask>> {
+        const RX_BATCH_SIZE: usize = 4;
+
+        let mut tasks: HashMap<LcoreId, Vec<BootstrapTask>> = HashMap::new();
+
+        self.ports.iter().for_each(|(name, port)| {
+            let rxqs = port.get_rxqs();
+
+            // the port doesn't have any rx.
+            if rxqs.is_empty() {
+                return;
+            }
+
+            if port.use_workers() {
+                // constructs rx task for distributor model.
+                unimplemented!();
+            } else {
+                // constructs rx tasks for run to completion model.
+                let pipeline = self.pipelines.get(name).unwrap();
+                rxqs.into_iter().for_each(|(lcore, rxq)| {
+                    tasks
+                        .entry(lcore)
+                        .or_insert_with(Vec::new)
+                        .push(BootstrapTask::CompletionRx(CompletionRx::new(
+                            rxq,
+                            pipeline.clone(),
+                            RX_BATCH_SIZE,
+                        )));
+                });
+            }
+        });
+
+        tasks
     }
 
     /// Starts the runtime execution.
     pub fn execute(self) -> Fallible<RuntimeGuard> {
         let mut handles = Vec::new();
         let (shutdown, wait) = Shutdown::new();
+        let mut tasks = self.bootstrap_tasks();
         static STARTED: AtomicUsize = AtomicUsize::new(0);
 
         for id in LcoreId::iter(true) {
             let shutdown = wait.clone();
+            let tasks = tasks.remove(&id);
             let handle = dpdk2::spawn(id, move || {
-                smol::run(
-                    async move {
-                        let lcore = LcoreId::current();
-                        debug!(?lcore, "starting core.");
+                smol::run(async move {
+                    let lcore = LcoreId::current();
+                    debug!(?lcore, "starting core.");
 
-                        // marks the lcore as started.
-                        STARTED.fetch_add(1, Ordering::Relaxed);
-                        debug!(?lcore, "core started.");
+                    if let Some(tasks) = tasks {
+                        debug!(?lcore, n = tasks.len(), "spawning bootstrap tasks.");
+                        tasks.into_iter().for_each(BootstrapTask::spawn_local);
+                    }
 
-                        shutdown.wait().await;
-                        debug!(?lcore, "core shut down.");
-                    },
-                )
+                    // marks the lcore as started.
+                    STARTED.fetch_add(1, Ordering::Relaxed);
+                    debug!(?lcore, "core started.");
+
+                    shutdown.wait().await;
+                    debug!(?lcore, "core shut down.");
+                })
             })?;
             handles.push(handle);
         }
 
         // waits for all the lcores to start.
         while STARTED.load(Ordering::Relaxed) != handles.len() {}
+
+        for port in self.ports.values() {
+            port.start()?;
+        }
 
         Ok(RuntimeGuard {
             runtime: self,
@@ -157,6 +217,7 @@ impl Drop for RuntimeGuard {
         // order for what we need. To control the order, we manually drop some
         // fields first.
         for (_, port) in self.runtime.ports.drain() {
+            port.stop();
             port.close();
         }
 
@@ -173,5 +234,19 @@ impl Drop for RuntimeGuard {
 impl fmt::Debug for RuntimeGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "RuntimeGuard")
+    }
+}
+
+/// A task to spawn when bootstrapping the runtime.
+enum BootstrapTask {
+    CompletionRx(CompletionRx),
+}
+
+impl BootstrapTask {
+    /// Spawns the task onto the thread-local executor.
+    pub(crate) fn spawn_local(self) {
+        match self {
+            BootstrapTask::CompletionRx(task) => task.spawn_local(),
+        }
     }
 }

@@ -519,7 +519,7 @@ impl PortBuilder {
 
         let socket = self.port_id.socket();
         warn!(
-            cond: mempool.socket() != socket,
+            cond: mempool.socket() != socket && socket != SocketId::ANY,
             message = "mempool socket does not match port socket.",
             mempool = ?mempool.socket(),
             port = ?socket
