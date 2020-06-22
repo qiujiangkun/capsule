@@ -1,10 +1,10 @@
 app_name = "skeleton"
 main_core = 0
-cores = [0]
+worker_cores = [0]
 dpdk_args = "-v --log-level eal:8"
 
 [[ports]]
     name = "eth1"
     device = "net_ring0"
-    rx_core = 1
-    tx_core = 2
+    #rx_cores = [0]
+    tx_core = 0

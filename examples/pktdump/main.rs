@@ -16,26 +16,42 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
-use capsule::batch::{Batch, Pipeline, Poll};
-use capsule::config::load_config;
+use capsule::config2::load_config;
 use capsule::packets::ip::v4::Ipv4;
 use capsule::packets::ip::v6::Ipv6;
 use capsule::packets::ip::IpPacket;
 use capsule::packets::{EtherTypes, Ethernet, Packet, Tcp};
-use capsule::{compose, Mbuf, PortQueue, Runtime};
+use capsule::{Mbuf, Runtime2};
 use colored::*;
 use failure::Fallible;
-use tracing::{debug, Level};
+use futures::prelude::*;
+use signal_hook::{self, pipe};
+use smol::{self, Async};
+use std::os::unix::net::UnixStream;
+use tracing::Level;
 use tracing_subscriber::fmt;
 
+async fn ctrl_c() -> Fallible<()> {
+    let (mut read, write) = Async::<UnixStream>::pair()?;
+    pipe::register(signal_hook::SIGINT, write)?;
+    println!("ctrl-c to quit.");
+
+    read.read_exact(&mut [0]).await?;
+    Ok(())
+}
+
 #[inline]
-fn dump_eth(packet: Mbuf) -> Fallible<Ethernet> {
-    let ethernet = packet.parse::<Ethernet>()?;
+fn dump_eth(packet: Mbuf) -> Fallible<()> {
+    let ethernet = packet.peek::<Ethernet>()?;
 
     let info_fmt = format!("{:?}", ethernet).magenta().bold();
     println!("{}", info_fmt);
 
-    Ok(ethernet)
+    match ethernet.ether_type() {
+        EtherTypes::Ipv4 => dump_v4(&ethernet),
+        EtherTypes::Ipv6 => dump_v6(&ethernet),
+        _ => Ok(()),
+    }
 }
 
 #[inline]
@@ -71,25 +87,6 @@ fn dump_tcp<T: IpPacket>(tcp: &Tcp<T>) {
     println!("{}", flow_fmt);
 }
 
-fn install(q: PortQueue) -> impl Pipeline {
-    Poll::new(q.clone())
-        .map(dump_eth)
-        .group_by(
-            |ethernet| ethernet.ether_type(),
-            |groups| {
-                compose!( groups {
-                    EtherTypes::Ipv4 => |group| {
-                        group.for_each(dump_v4)
-                    }
-                    EtherTypes::Ipv6 => |group| {
-                        group.for_each(dump_v6)
-                    }
-                });
-            },
-        )
-        .send(q)
-}
-
 fn main() -> Fallible<()> {
     let subscriber = fmt::Subscriber::builder()
         .with_max_level(Level::DEBUG)
@@ -97,10 +94,14 @@ fn main() -> Fallible<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     let config = load_config()?;
-    debug!(?config);
+    let guard = Runtime2::from_config(config)?
+        .set_port_pipeline("eth1", dump_eth)
+        .set_port_pipeline("eth2", dump_eth)
+        .execute()?;
 
-    Runtime::build(config)?
-        .add_pipeline_to_port("eth1", install)?
-        .add_pipeline_to_port("eth2", install)?
-        .execute()
+    let _ = smol::block_on(ctrl_c());
+
+    drop(guard);
+
+    Ok(())
 }
