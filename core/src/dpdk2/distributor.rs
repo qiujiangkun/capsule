@@ -23,6 +23,9 @@ use std::fmt;
 use std::os::raw;
 use std::ptr::{self, NonNull};
 
+// taken from distributor_private.h.
+pub(crate) const DISTRIBUTOR_BURST: usize = 8;
+
 /// Component to pass packets to workers, with dynamic load balancing. The
 /// distributor will ensure that no two packets that have the same flow id,
 /// or tag, in the mbuf will be processed on different cores at the same time.
@@ -40,7 +43,7 @@ impl Distributor {
 
     /// Processes a set of packets by distributing them among workers that
     /// request packets.
-    pub(crate) fn distribute(&mut self, packets: &mut Vec<NonNull<ffi::rte_mbuf>>) {
+    pub(crate) fn process(&mut self, packets: &mut Vec<NonNull<ffi::rte_mbuf>>) {
         let len = packets.len();
 
         unsafe {
@@ -86,7 +89,7 @@ pub(crate) struct Worker {
 impl Worker {
     /// Polls the distributor for packets, up to 8 packets.
     pub(crate) fn poll(&mut self, packets: &mut Vec<NonNull<ffi::rte_mbuf>>) {
-        debug_assert!(packets.capacity() >= 8);
+        debug_assert!(packets.capacity() >= DISTRIBUTOR_BURST);
 
         unsafe {
             let len = ffi::rte_distributor_poll_pkt(
@@ -197,10 +200,8 @@ mod tests {
 
         // we expect even distribution.
         let mut packets = gen_packets(16);
-        dist.distribute(&mut packets);
+        dist.process(&mut packets);
         assert!(packets.is_empty());
-
-        dist.flush();
 
         handles
             .into_iter()

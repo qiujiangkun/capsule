@@ -16,11 +16,11 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
-mod completion;
 mod shutdown;
+mod tasks;
 
-use self::completion::CompletionRx;
 use self::shutdown::Shutdown;
+use self::tasks::{BootstrapTask, CompletionRx, DistributeRx, PipelineWorker};
 use crate::config2::RuntimeConfig;
 use crate::dpdk2::{self, JoinHandle, LcoreId, Mbuf, Mempool, Port, PortBuilder};
 use crate::{debug, info};
@@ -103,7 +103,7 @@ impl Runtime2 {
     }
 
     fn bootstrap_tasks(&self) -> HashMap<LcoreId, Vec<BootstrapTask>> {
-        const RX_BATCH_SIZE: usize = 4;
+        const RX_BURST_SIZE: usize = 4;
 
         let mut tasks: HashMap<LcoreId, Vec<BootstrapTask>> = HashMap::new();
 
@@ -116,20 +116,35 @@ impl Runtime2 {
             }
 
             if port.use_workers() {
-                // constructs rx task for distributor model.
-                unimplemented!();
+                // constructs rx tasks for distributor model.
+                let (dist, workers) =
+                    dpdk2::distributor(name, port.port_id().socket(), self.worker_cores.len())
+                        .unwrap(); //TODO:
+                let pipeline = self.pipelines.get(name).unwrap(); //TODO:
+                let (lcore, rxq) = rxqs.into_iter().next().unwrap(); //TODO:
+
+                self.worker_cores
+                    .iter()
+                    .zip(workers.into_iter())
+                    .for_each(|(lcore, worker)| {
+                        tasks
+                            .entry(*lcore)
+                            .or_insert_with(Vec::new)
+                            .push(PipelineWorker::new(worker, pipeline.clone()).into());
+                    });
+
+                tasks
+                    .entry(lcore)
+                    .or_insert_with(Vec::new)
+                    .push(DistributeRx::new(rxq, dist, RX_BURST_SIZE).into());
             } else {
                 // constructs rx tasks for run to completion model.
-                let pipeline = self.pipelines.get(name).unwrap();
+                let pipeline = self.pipelines.get(name).unwrap(); //TODO:
                 rxqs.into_iter().for_each(|(lcore, rxq)| {
                     tasks
                         .entry(lcore)
                         .or_insert_with(Vec::new)
-                        .push(BootstrapTask::CompletionRx(CompletionRx::new(
-                            rxq,
-                            pipeline.clone(),
-                            RX_BATCH_SIZE,
-                        )));
+                        .push(CompletionRx::new(rxq, pipeline.clone(), RX_BURST_SIZE).into());
                 });
             }
         });
@@ -234,19 +249,5 @@ impl Drop for RuntimeGuard {
 impl fmt::Debug for RuntimeGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "RuntimeGuard")
-    }
-}
-
-/// A task to spawn when bootstrapping the runtime.
-enum BootstrapTask {
-    CompletionRx(CompletionRx),
-}
-
-impl BootstrapTask {
-    /// Spawns the task onto the thread-local executor.
-    pub(crate) fn spawn_local(self) {
-        match self {
-            BootstrapTask::CompletionRx(task) => task.spawn_local(),
-        }
     }
 }

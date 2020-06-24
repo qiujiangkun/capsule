@@ -17,38 +17,45 @@
 */
 
 use crate::debug;
-use crate::dpdk2::{Mbuf, PortRxQueue};
+use crate::dpdk2::{LcoreId, Mbuf, PortRxQueue};
 use async_std::task;
 use failure::Fallible;
 use smol::Task;
 use std::sync::Arc;
+use std::time::Duration;
 
-/// A run-to-completion RX task.
+/// Run-to-completion RX task.
+///
+/// The run-to-completion model polls the RX queue in a loop and executes
+/// the per packet pipeline on the same lcore.
 pub(crate) struct CompletionRx {
     rxq: PortRxQueue,
     f: Arc<dyn Fn(Mbuf) -> Fallible<()> + Send + Sync + 'static>,
-    batch: usize,
+    burst: usize,
 }
 
 impl CompletionRx {
     pub(crate) fn new(
         rxq: PortRxQueue,
         f: Arc<dyn Fn(Mbuf) -> Fallible<()> + Send + Sync + 'static>,
-        batch: usize,
+        burst: usize,
     ) -> Self {
-        CompletionRx { rxq, f, batch }
+        CompletionRx { rxq, f, burst }
     }
 }
 
 impl CompletionRx {
-    /// Spawns the rx onto the thread-local executor.
+    /// Spawns the task onto the thread-local executor.
     pub(crate) fn spawn_local(self) {
-        let CompletionRx { rxq, f, batch } = self;
-        debug!(queue = ?rxq, "spawning run-to-completion rx.");
+        let lcore = LcoreId::current();
+        let CompletionRx { rxq, f, burst } = self;
 
-        Task::local(Box::pin(async move {
-            debug!(queue = ?rxq, "executing run-to-completion rx.");
-            let mut packets = Vec::with_capacity(batch);
+        debug!(?lcore, queue = ?rxq, "spawning run-to-completion rx.");
+
+        Task::local(async move {
+            debug!(?lcore, queue = ?rxq, "executing run-to-completion rx.");
+            let mut packets = Vec::with_capacity(burst);
+            let mut wait = Duration::from_micros(1);
 
             loop {
                 rxq.receive(&mut packets);
@@ -58,11 +65,16 @@ impl CompletionRx {
                         let mbuf = unsafe { Mbuf::from_ptr(packet.as_ptr()) };
                         let _ = f(mbuf);
                     }
-                }
 
-                task::yield_now().await;
+                    // cooperatively moves to the back of the execution queue,
+                    // making room for other tasks before polling rx again.
+                    task::yield_now().await;
+                } else {
+                    // exponentially backs off.
+                    super::backoff(&mut wait).await;
+                }
             }
-        }))
+        })
         .detach();
     }
 }
