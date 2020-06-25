@@ -18,14 +18,18 @@
 
 mod completion;
 mod distribute;
+mod transmit;
 mod worker;
 
 pub(crate) use self::completion::*;
 pub(crate) use self::distribute::*;
+pub(crate) use self::transmit::*;
 pub(crate) use self::worker::*;
 
+use crate::dpdk2::LcoreId;
 use async_std::task;
 use std::cmp;
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// A task to spawn when bootstrapping the runtime.
@@ -33,6 +37,7 @@ pub(crate) enum BootstrapTask {
     CompletionRx(CompletionRx),
     DistributeRx(DistributeRx),
     PipelineWorker(PipelineWorker),
+    Transmit(Transmit),
 }
 
 impl BootstrapTask {
@@ -42,6 +47,7 @@ impl BootstrapTask {
             BootstrapTask::CompletionRx(task) => task.spawn_local(),
             BootstrapTask::DistributeRx(task) => task.spawn_local(),
             BootstrapTask::PipelineWorker(task) => task.spawn_local(),
+            BootstrapTask::Transmit(task) => task.spawn_local(),
         }
     }
 }
@@ -61,6 +67,33 @@ impl From<DistributeRx> for BootstrapTask {
 impl From<PipelineWorker> for BootstrapTask {
     fn from(task: PipelineWorker) -> Self {
         BootstrapTask::PipelineWorker(task)
+    }
+}
+
+impl From<Transmit> for BootstrapTask {
+    fn from(task: Transmit) -> Self {
+        BootstrapTask::Transmit(task)
+    }
+}
+
+/// Bootstrap tasks by lcore.
+pub(crate) struct BootstrapTasks {
+    tasks: HashMap<LcoreId, Vec<BootstrapTask>>,
+}
+
+impl BootstrapTasks {
+    pub(crate) fn new() -> Self {
+        BootstrapTasks {
+            tasks: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, lcore: LcoreId, task: BootstrapTask) {
+        self.tasks.entry(lcore).or_insert_with(Vec::new).push(task);
+    }
+
+    pub(crate) fn take(&mut self, lcore: LcoreId) -> Option<Vec<BootstrapTask>> {
+        self.tasks.remove(&lcore)
     }
 }
 

@@ -43,13 +43,13 @@ impl Distributor {
 
     /// Processes a set of packets by distributing them among workers that
     /// request packets.
-    pub(crate) fn process(&mut self, packets: &mut Vec<NonNull<ffi::rte_mbuf>>) {
+    pub(crate) fn process(&mut self, packets: &mut Vec<*mut ffi::rte_mbuf>) {
         let len = packets.len();
 
         unsafe {
             let processed = ffi::rte_distributor_process(
                 self.raw_mut(),
-                packets.as_mut_ptr() as *mut *mut ffi::rte_mbuf,
+                packets.as_mut_ptr(),
                 len as raw::c_uint,
             ) as usize;
 
@@ -66,6 +66,13 @@ impl Distributor {
         unsafe {
             ffi::rte_distributor_flush(self.raw_mut());
         }
+    }
+}
+
+impl Drop for Distributor {
+    fn drop(&mut self) {
+        // attempts to free all blocked workers on drop.
+        self.flush();
     }
 }
 
@@ -88,14 +95,14 @@ pub(crate) struct Worker {
 
 impl Worker {
     /// Polls the distributor for packets, up to 8 packets.
-    pub(crate) fn poll(&mut self, packets: &mut Vec<NonNull<ffi::rte_mbuf>>) {
+    pub(crate) fn poll(&mut self, packets: &mut Vec<*mut ffi::rte_mbuf>) {
         debug_assert!(packets.capacity() >= DISTRIBUTOR_BURST);
 
         unsafe {
             let len = ffi::rte_distributor_poll_pkt(
                 self.distributor.as_mut(),
                 self.worker_id,
-                packets.as_mut_ptr() as *mut *mut ffi::rte_mbuf,
+                packets.as_mut_ptr(),
             );
 
             if len > 0 {
@@ -163,16 +170,13 @@ mod tests {
     use super::*;
     use capsule::dpdk2::{self, LcoreId, Mbuf};
 
-    fn gen_packets(len: usize) -> Vec<NonNull<ffi::rte_mbuf>> {
+    fn gen_packets(len: usize) -> Vec<*mut ffi::rte_mbuf> {
         (0..len)
             .map(|idx| {
                 let ptr = Mbuf::new().unwrap().into_ptr();
-                unsafe {
-                    let mut mbuf = NonNull::new_unchecked(ptr);
-                    // tags each packet so they can be evenly distributed.
-                    mbuf.as_mut().__bindgen_anon_4.hash.usr = idx as u32;
-                    mbuf
-                }
+                // tags each packet so they can be evenly distributed.
+                unsafe { (*ptr).__bindgen_anon_4.hash.usr = idx as u32 };
+                ptr
             })
             .collect::<Vec<_>>()
     }

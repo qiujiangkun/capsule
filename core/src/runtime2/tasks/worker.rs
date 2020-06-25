@@ -47,10 +47,10 @@ impl PipelineWorker {
         let lcore = LcoreId::current();
         let PipelineWorker { mut worker, f } = self;
 
-        debug!(?lcore, worker = ?worker, "spawning pipeline worker.");
+        debug!(?lcore, ?worker, "spawning pipeline worker.");
 
         Task::local(async move {
-            debug!(?lcore, worker = ?worker, "executing pipeline worker.");
+            debug!(?lcore, ?worker, "executing pipeline worker.");
             let mut packets = Vec::with_capacity(DISTRIBUTOR_BURST);
             let mut wait = Duration::from_micros(1);
 
@@ -63,7 +63,7 @@ impl PipelineWorker {
                     wait = Duration::from_micros(1);
 
                     for packet in packets.drain(..) {
-                        let mbuf = unsafe { Mbuf::from_ptr(packet.as_ptr()) };
+                        let mbuf = unsafe { Mbuf::from_ptr(packet) };
                         let _ = f(mbuf);
                     }
 

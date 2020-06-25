@@ -16,11 +16,13 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
+mod forwarders;
 mod shutdown;
 mod tasks;
 
+use self::forwarders::{PortForwarders, FORWARDERS};
 use self::shutdown::Shutdown;
-use self::tasks::{BootstrapTask, CompletionRx, DistributeRx, PipelineWorker};
+use self::tasks::{BootstrapTask, BootstrapTasks, CompletionRx, DistributeRx, PipelineWorker};
 use crate::config2::RuntimeConfig;
 use crate::dpdk2::{self, JoinHandle, LcoreId, Mbuf, Mempool, Port, PortBuilder};
 use crate::{debug, info};
@@ -102,70 +104,78 @@ impl Runtime2 {
         self
     }
 
-    fn bootstrap_tasks(&self) -> HashMap<LcoreId, Vec<BootstrapTask>> {
+    fn tasks_and_forwarders(&self) -> Fallible<(BootstrapTasks, PortForwarders)> {
         const RX_BURST_SIZE: usize = 4;
+        const TX_BURST_SIZE: usize = 4;
 
-        let mut tasks: HashMap<LcoreId, Vec<BootstrapTask>> = HashMap::new();
+        let mut tasks = BootstrapTasks::new();
+        let mut forwarders = PortForwarders::new();
 
-        self.ports.iter().for_each(|(name, port)| {
+        for (name, port) in self.ports.iter() {
             let rxqs = port.get_rxqs();
+            let txqs = port.get_txqs();
 
-            // the port doesn't have any rx.
-            if rxqs.is_empty() {
-                return;
-            }
-
-            if port.use_workers() {
-                // constructs rx tasks for distributor model.
-                let (dist, workers) =
-                    dpdk2::distributor(name, port.port_id().socket(), self.worker_cores.len())
-                        .unwrap(); //TODO:
+            // port has rx.
+            if !rxqs.is_empty() {
                 let pipeline = self.pipelines.get(name).unwrap(); //TODO:
-                let (lcore, rxq) = rxqs.into_iter().next().unwrap(); //TODO:
 
-                self.worker_cores
-                    .iter()
-                    .zip(workers.into_iter())
-                    .for_each(|(lcore, worker)| {
-                        tasks
-                            .entry(*lcore)
-                            .or_insert_with(Vec::new)
-                            .push(PipelineWorker::new(worker, pipeline.clone()).into());
+                if port.use_workers() {
+                    // constructs rx tasks for distributor model.
+                    let (dist, workers) =
+                        dpdk2::distributor(name, port.port_id().socket(), self.worker_cores.len())?;
+                    // there's only one rxq in this mode, safe to unwrap.
+                    let (lcore, rxq) = rxqs.into_iter().next().unwrap();
+
+                    // constructs a pipeline worker task for each worker lcore.
+                    self.worker_cores.iter().zip(workers.into_iter()).for_each(
+                        |(lcore, worker)| {
+                            tasks
+                                .push(*lcore, PipelineWorker::new(worker, pipeline.clone()).into());
+                        },
+                    );
+
+                    tasks.push(lcore, DistributeRx::new(rxq, dist, RX_BURST_SIZE).into());
+                } else {
+                    // constructs rx tasks for run to completion model.
+                    rxqs.into_iter().for_each(|(lcore, rxq)| {
+                        tasks.push(
+                            lcore,
+                            CompletionRx::new(rxq, pipeline.clone(), RX_BURST_SIZE).into(),
+                        );
                     });
-
-                tasks
-                    .entry(lcore)
-                    .or_insert_with(Vec::new)
-                    .push(DistributeRx::new(rxq, dist, RX_BURST_SIZE).into());
-            } else {
-                // constructs rx tasks for run to completion model.
-                let pipeline = self.pipelines.get(name).unwrap(); //TODO:
-                rxqs.into_iter().for_each(|(lcore, rxq)| {
-                    tasks
-                        .entry(lcore)
-                        .or_insert_with(Vec::new)
-                        .push(CompletionRx::new(rxq, pipeline.clone(), RX_BURST_SIZE).into());
-                });
+                }
             }
-        });
 
-        tasks
+            if !txqs.is_empty() {
+                // there's only one txq, safe to unwrap.
+                let (lcore, txq) = txqs.into_iter().next().unwrap();
+                let (sender, task) = tasks::transmit_task(txq, TX_BURST_SIZE);
+                forwarders.add(name, sender.into());
+                tasks.push(lcore, task.into());
+            }
+        }
+
+        Ok((tasks, forwarders))
     }
 
     /// Starts the runtime execution.
     pub fn execute(self) -> Fallible<RuntimeGuard> {
         let mut handles = Vec::new();
         let (shutdown, wait) = Shutdown::new();
-        let mut tasks = self.bootstrap_tasks();
+        let (mut tasks, forwarders) = self.tasks_and_forwarders()?;
         static STARTED: AtomicUsize = AtomicUsize::new(0);
 
         for id in LcoreId::iter(true) {
             let shutdown = wait.clone();
-            let tasks = tasks.remove(&id);
+            let tasks = tasks.take(id);
+            let forwarders = forwarders.clone();
             let handle = dpdk2::spawn(id, move || {
                 smol::run(async move {
                     let lcore = LcoreId::current();
                     debug!(?lcore, "starting core.");
+
+                    // sets the port forwarders.
+                    FORWARDERS.with(|tls| tls.set(Some(forwarders)));
 
                     if let Some(tasks) = tasks {
                         debug!(?lcore, n = tasks.len(), "spawning bootstrap tasks.");

@@ -24,7 +24,7 @@ use failure::{Fail, Fallible};
 use std::collections::HashMap;
 use std::fmt;
 use std::os::raw;
-use std::ptr::{self, NonNull};
+use std::ptr;
 
 /// An opaque identifier for a PMD device port.
 #[derive(Copy, Clone)]
@@ -72,16 +72,14 @@ pub(crate) struct PortRxQueue {
 
 impl PortRxQueue {
     /// Receives a burst of Mbufs to fill the packets buffer.
-    pub(crate) fn receive(&self, packets: &mut Vec<NonNull<ffi::rte_mbuf>>) {
+    pub(crate) fn receive(&self, packets: &mut Vec<*mut ffi::rte_mbuf>) {
         let max = packets.capacity();
 
         unsafe {
             let len = ffi::_rte_eth_rx_burst(
                 self.port.raw(),
                 self.index.raw(),
-                // `Mbuf` has the same layout as `*mut rte_mbuf`, it's safe to
-                // perform a pointer conversion here.
-                packets.as_mut_ptr() as *mut *mut ffi::rte_mbuf,
+                packets.as_mut_ptr(),
                 max as u16,
             );
             packets.set_len(len as usize);
@@ -119,9 +117,9 @@ pub(crate) struct PortTxQueue {
 
 impl PortTxQueue {
     /// Transmits the packets in the buffer.
-    pub(crate) fn transmit(&self, packets: &mut Vec<NonNull<ffi::rte_mbuf>>) {
+    pub(crate) fn transmit(&self, packets: &mut Vec<*mut ffi::rte_mbuf>) {
         let mut to_send = packets.len();
-        let mut ptrs = packets.as_mut_ptr() as *mut *mut ffi::rte_mbuf;
+        let mut ptrs = packets.as_mut_ptr();
 
         loop {
             let sent = unsafe {

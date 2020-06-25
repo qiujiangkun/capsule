@@ -36,9 +36,7 @@ impl DistributeRx {
     pub(crate) fn new(rxq: PortRxQueue, dist: Distributor, burst: usize) -> Self {
         DistributeRx { rxq, dist, burst }
     }
-}
 
-impl DistributeRx {
     /// Spawns the task onto the thread-local executor.
     pub(crate) fn spawn_local(self) {
         let lcore = LcoreId::current();
@@ -48,10 +46,10 @@ impl DistributeRx {
             burst,
         } = self;
 
-        debug!(?lcore, queue = ?rxq, "spawning distribute rx.");
+        debug!(?lcore, ?rxq, "spawning distribute rx.");
 
         Task::local(async move {
-            debug!(?lcore, queue = ?rxq, "executing distribute rx.");
+            debug!(?lcore, ?rxq, "executing distribute rx.");
             let mut packets = Vec::with_capacity(burst);
             let mut wait = Duration::from_micros(1);
 

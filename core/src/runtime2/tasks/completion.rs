@@ -42,18 +42,16 @@ impl CompletionRx {
     ) -> Self {
         CompletionRx { rxq, f, burst }
     }
-}
 
-impl CompletionRx {
     /// Spawns the task onto the thread-local executor.
     pub(crate) fn spawn_local(self) {
         let lcore = LcoreId::current();
         let CompletionRx { rxq, f, burst } = self;
 
-        debug!(?lcore, queue = ?rxq, "spawning run-to-completion rx.");
+        debug!(?lcore, ?rxq, "spawning run-to-completion rx.");
 
         Task::local(async move {
-            debug!(?lcore, queue = ?rxq, "executing run-to-completion rx.");
+            debug!(?lcore, ?rxq, "executing run-to-completion rx.");
             let mut packets = Vec::with_capacity(burst);
             let mut wait = Duration::from_micros(1);
 
@@ -62,7 +60,7 @@ impl CompletionRx {
 
                 if !packets.is_empty() {
                     for packet in packets.drain(..) {
-                        let mbuf = unsafe { Mbuf::from_ptr(packet.as_ptr()) };
+                        let mbuf = unsafe { Mbuf::from_ptr(packet) };
                         let _ = f(mbuf);
                     }
 
