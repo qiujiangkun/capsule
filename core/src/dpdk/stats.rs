@@ -24,14 +24,14 @@ use anyhow::Result;
 use std::ptr::NonNull;
 
 /// Port stats collector.
-pub(crate) struct PortStats {
+pub struct PortStats {
     id: PortId,
     name: String,
 }
 
 impl PortStats {
     /// Builds a collector from the port.
-    pub(crate) fn build(port: &Port) -> Self {
+    pub fn build(port: &Port) -> Self {
         PortStats {
             id: port.id(),
             name: port.name().to_owned(),
@@ -39,7 +39,7 @@ impl PortStats {
     }
 
     /// Returns the port name.
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         self.name.as_str()
     }
 
@@ -58,7 +58,7 @@ impl PortStats {
     }
 
     /// Collects the port stats tracked by DPDK.
-    pub(crate) fn collect(&self) -> Result<Vec<(Key, Measurement)>> {
+    pub fn collect(&self) -> Result<Vec<(Key, Measurement)>> {
         let mut stats = ffi::rte_eth_stats::default();
         unsafe {
             ffi::rte_eth_stats_get(self.id.raw(), &mut stats).into_result(DpdkError::from_errno)?;
@@ -78,13 +78,13 @@ impl PortStats {
 }
 
 /// Mempool stats collector.
-pub(crate) struct MempoolStats {
+pub struct MempoolStats {
     raw: NonNull<ffi::rte_mempool>,
 }
 
 impl MempoolStats {
     /// Builds a collector from the port.
-    pub(crate) fn build(mempool: &Mempool) -> Self {
+    pub fn build(mempool: &Mempool) -> Self {
         MempoolStats {
             raw: unsafe {
                 NonNull::new_unchecked(
@@ -117,7 +117,7 @@ impl MempoolStats {
     }
 
     /// Collects the mempool stats.
-    pub(crate) fn collect(&self) -> Vec<(Key, Measurement)> {
+    pub fn collect(&self) -> Vec<(Key, Measurement)> {
         let used = unsafe { ffi::rte_mempool_in_use_count(self.raw()) as i64 };
         let free = self.raw().size as i64 - used;
 

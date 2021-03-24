@@ -27,11 +27,11 @@ mod stats;
 pub use self::kni::*;
 #[allow(unreachable_pub)]
 pub use self::mbuf::*;
-pub(crate) use self::mempool::*;
+pub use self::mempool::*;
 #[allow(unreachable_pub)]
 pub use self::port::*;
 #[cfg(feature = "metrics")]
-pub(crate) use self::stats::*;
+pub use self::stats::*;
 
 use crate::debug;
 use crate::ffi::{self, AsStr, ToCString, ToResult};
@@ -48,13 +48,13 @@ use thiserror::Error;
 /// When an FFI call fails, the `errno` is translated into `DpdkError`.
 #[derive(Debug, Error)]
 #[error("{0}")]
-pub(crate) struct DpdkError(String);
+pub struct DpdkError(String);
 
 impl DpdkError {
     /// Returns the `DpdkError` for the most recent failure on the current
     /// thread.
     #[inline]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         DpdkError::from_errno(-1)
     }
 
@@ -103,7 +103,7 @@ impl SocketId {
     /// Returns the raw value needed for FFI calls.
     #[allow(clippy::trivially_copy_pass_by_ref)]
     #[inline]
-    pub(crate) fn raw(&self) -> raw::c_int {
+    pub fn raw(&self) -> raw::c_int {
         self.0
     }
 }
@@ -125,7 +125,7 @@ impl CoreId {
     /// Creates a new CoreId from the numeric ID assigned to the core
     /// by the system.
     #[inline]
-    pub(crate) fn new(i: usize) -> CoreId {
+    pub fn new(i: usize) -> CoreId {
         CoreId(i)
     }
 
@@ -145,14 +145,14 @@ impl CoreId {
     /// Returns the raw value.
     #[allow(clippy::trivially_copy_pass_by_ref)]
     #[inline]
-    pub(crate) fn raw(&self) -> usize {
+    pub fn raw(&self) -> usize {
         self.0
     }
 
     /// Sets the current thread's affinity to this core.
     #[allow(clippy::trivially_copy_pass_by_ref)]
     #[inline]
-    pub(crate) fn set_thread_affinity(&self) -> Result<()> {
+    pub fn set_thread_affinity(&self) -> Result<()> {
         unsafe {
             // the two types that represent `cpu_set` have identical layout,
             // hence it is safe to transmute between them.
@@ -178,7 +178,7 @@ thread_local! {
 }
 
 /// Initializes the Environment Abstraction Layer (EAL).
-pub(crate) fn eal_init(args: Vec<String>) -> Result<()> {
+pub fn eal_init(args: Vec<String>) -> Result<()> {
     debug!(arguments=?args);
 
     let len = args.len() as raw::c_int;
@@ -198,7 +198,7 @@ pub(crate) fn eal_init(args: Vec<String>) -> Result<()> {
 }
 
 /// Cleans up the Environment Abstraction Layer (EAL).
-pub(crate) fn eal_cleanup() -> Result<()> {
+pub fn eal_cleanup() -> Result<()> {
     unsafe {
         ffi::rte_eal_cleanup()
             .into_result(DpdkError::from_errno)
@@ -216,7 +216,7 @@ fn eth_macaddr_get(port_id: u16) -> MacAddr {
 }
 
 /// Frees the `rte_mbuf` in bulk.
-pub(crate) fn mbuf_free_bulk(mbufs: Vec<*mut ffi::rte_mbuf>) {
+pub fn mbuf_free_bulk(mbufs: Vec<*mut ffi::rte_mbuf>) {
     assert!(!mbufs.is_empty());
 
     let mut to_free = Vec::with_capacity(mbufs.len());

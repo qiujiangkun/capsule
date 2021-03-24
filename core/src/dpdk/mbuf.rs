@@ -83,7 +83,7 @@ impl SizeOf for ::std::net::Ipv6Addr {
 
 /// Error indicating buffer access failures.
 #[derive(Debug, Error)]
-pub(crate) enum BufferError {
+pub enum BufferError {
     /// The offset exceeds the buffer length.
     #[error("Offset {0} exceeds the buffer length {1}.")]
     BadOffset(usize, usize),
@@ -173,7 +173,7 @@ impl Mbuf {
 
     /// Creates a new `Mbuf` from a raw pointer.
     #[inline]
-    pub(crate) unsafe fn from_ptr(ptr: *mut ffi::rte_mbuf) -> Self {
+    pub unsafe fn from_ptr(ptr: *mut ffi::rte_mbuf) -> Self {
         Mbuf {
             inner: MbufInner::Original(NonNull::new_unchecked(ptr)),
         }
@@ -199,7 +199,7 @@ impl Mbuf {
 
     /// Returns the raw pointer from the offset
     #[inline]
-    pub(crate) unsafe fn data_address(&self, offset: usize) -> *mut u8 {
+    pub unsafe fn data_address(&self, offset: usize) -> *mut u8 {
         let raw = self.raw();
         (raw.buf_addr as *mut u8).offset(raw.data_off as isize + offset as isize)
     }
@@ -417,7 +417,7 @@ impl Mbuf {
     /// The `Mbuf` is consumed. It is the caller's the responsibility to
     /// free the raw pointer after use. Otherwise the buffer is leaked.
     #[inline]
-    pub(crate) fn into_ptr(self) -> *mut ffi::rte_mbuf {
+    pub fn into_ptr(self) -> *mut ffi::rte_mbuf {
         let ptr = self.inner.ptr().as_ptr();
         mem::forget(self);
         ptr
@@ -446,7 +446,7 @@ impl Mbuf {
     }
 
     /// Frees the message buffers in bulk.
-    pub(crate) fn free_bulk(mbufs: Vec<Mbuf>) {
+    pub fn free_bulk(mbufs: Vec<Mbuf>) {
         let ptrs = mbufs.into_iter().map(Mbuf::into_ptr).collect::<Vec<_>>();
         super::mbuf_free_bulk(ptrs);
     }

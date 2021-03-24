@@ -18,7 +18,7 @@
 
 mod core_map;
 
-pub(crate) use self::core_map::*;
+pub use self::core_map::*;
 
 use crate::batch::Pipeline;
 use crate::config::RuntimeConfig;

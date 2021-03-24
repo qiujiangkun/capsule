@@ -72,9 +72,9 @@
 //! as "default".
 
 // re-export some metrics types to make feature gated imports easier.
-pub(crate) use metrics_core::{labels, Key};
-pub(crate) use metrics_runtime::data::Counter;
-pub(crate) use metrics_runtime::Measurement;
+pub use metrics_core::{labels, Key};
+pub use metrics_runtime::data::Counter;
+pub use metrics_runtime::Measurement;
 
 use crate::dpdk::{Mempool, MempoolStats, Port};
 use crate::warn;
@@ -89,7 +89,7 @@ static RECEIVER: OnceCell<Receiver> = OnceCell::new();
 /// potentially fail, the `Lazy` convenience type is not safe.
 ///
 /// Also very important that `init` is not called twice.
-pub(crate) fn init() -> Result<()> {
+pub fn init() -> Result<()> {
     let receiver = Receiver::builder().build()?;
 
     RECEIVER
@@ -99,7 +99,7 @@ pub(crate) fn init() -> Result<()> {
 }
 
 /// Registers DPDK collected port stats with the metrics store.
-pub(crate) fn register_port_stats(ports: &[Port]) {
+pub fn register_port_stats(ports: &[Port]) {
     let stats = ports.iter().map(Port::stats).collect::<Vec<_>>();
     SINK.clone().proxy("port", move || {
         stats
@@ -115,7 +115,7 @@ pub(crate) fn register_port_stats(ports: &[Port]) {
 }
 
 /// Registers collected mempool stats with the metrics store.
-pub(crate) fn register_mempool_stats(mempools: &[Mempool]) {
+pub fn register_mempool_stats(mempools: &[Mempool]) {
     let stats = mempools.iter().map(Mempool::stats).collect::<Vec<_>>();
     SINK.clone().proxy("mempool", move || {
         stats.iter().flat_map(MempoolStats::collect).collect()
@@ -137,4 +137,4 @@ pub fn global() -> &'static Receiver {
 }
 
 /// The root sink for all framework metrics.
-pub(crate) static SINK: Lazy<Sink> = Lazy::new(|| global().sink().scoped("capsule"));
+pub static SINK: Lazy<Sink> = Lazy::new(|| global().sink().scoped("capsule"));

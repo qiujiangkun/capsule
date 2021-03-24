@@ -76,7 +76,7 @@ pub struct PollRx<F>
 where
     F: Fn() -> Vec<Mbuf>,
 {
-    pub(crate) f: F,
+    pub f: F,
 }
 
 impl<F> PacketRx for PollRx<F>

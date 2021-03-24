@@ -35,7 +35,7 @@ use tokio_timer::timer::{self, Timer};
 /// This is designed to be a single use handle. We only need to park the
 /// core one time at initialization time. Once unparked, we will never
 /// park the core again.
-pub(crate) struct Park {
+pub struct Park {
     core_id: CoreId,
     sender: SyncSender<()>,
     receiver: Receiver<()>,
@@ -70,13 +70,13 @@ impl Park {
 ///
 /// This is designed to be a single use handle. We will unpark a core one
 /// time after all initialization completes. Do not reinvoke this.
-pub(crate) struct Unpark {
+pub struct Unpark {
     core_id: CoreId,
     sender: SyncSender<()>,
 }
 
 impl Unpark {
-    pub(crate) fn unpark(&self) {
+    pub fn unpark(&self) {
         if let Err(err) = self.sender.send(()) {
             // we are not expecting failures, but we will log it in case.
             error!(message = "unpark failed.", core=?self.core_id, ?err);
@@ -85,7 +85,7 @@ impl Unpark {
 }
 
 /// A tokio oneshot channel based shutdown mechanism.
-pub(crate) struct Shutdown {
+pub struct Shutdown {
     receiver: oneshot::Receiver<()>,
 }
 
@@ -103,13 +103,13 @@ impl Shutdown {
 }
 
 /// A sync-channel based shutdown trigger to terminate a background thread.
-pub(crate) struct ShutdownTrigger {
+pub struct ShutdownTrigger {
     core_id: CoreId,
     sender: oneshot::Sender<()>,
 }
 
 impl ShutdownTrigger {
-    pub(crate) fn shutdown(self) {
+    pub fn shutdown(self) {
         if let Err(err) = self.sender.send(()) {
             // we are not expecting failures, but we will log it in case.
             error!(message = "shutdown failed.", core=?self.core_id, ?err);
@@ -123,10 +123,10 @@ impl ShutdownTrigger {
 /// Use this `thread` handle to run the main loop. Use the `reactor` handle
 /// to catch Unix signals to terminate the main loop. Use the `timer` handle
 /// to create new time based tasks with either a `Delay` or `Interval`.
-pub(crate) struct MasterExecutor {
-    pub(crate) reactor: driver::Handle,
-    pub(crate) timer: timer::Handle,
-    pub(crate) thread: CurrentThread<Timer<Reactor>>,
+pub struct MasterExecutor {
+    pub reactor: driver::Handle,
+    pub timer: timer::Handle,
+    pub thread: CurrentThread<Timer<Reactor>>,
 }
 
 /// A thread/core abstraction used to interact with a background thread
@@ -140,17 +140,17 @@ pub(crate) struct MasterExecutor {
 /// The master thread also has an associated `CoreExecutor`, but `unpark`
 /// won't do anything because the thread is not parked. Tasks can be spawned
 /// onto it with this handle just like a background thread.
-pub(crate) struct CoreExecutor {
-    pub(crate) timer: timer::Handle,
-    pub(crate) thread: current_thread::Handle,
-    pub(crate) unpark: Option<Unpark>,
-    pub(crate) shutdown: Option<ShutdownTrigger>,
-    pub(crate) join: Option<JoinHandle<()>>,
+pub struct CoreExecutor {
+    pub timer: timer::Handle,
+    pub thread: current_thread::Handle,
+    pub unpark: Option<Unpark>,
+    pub shutdown: Option<ShutdownTrigger>,
+    pub join: Option<JoinHandle<()>>,
 }
 
 /// Core errors.
 #[derive(Debug, Error)]
-pub(crate) enum CoreError {
+pub enum CoreError {
     /// Core is not found.
     #[error("{0:?} is not found.")]
     NotFound(CoreId),
@@ -161,9 +161,9 @@ pub(crate) enum CoreError {
 }
 
 /// Map of all the core handles.
-pub(crate) struct CoreMap {
-    pub(crate) master_core: MasterExecutor,
-    pub(crate) cores: HashMap<CoreId, CoreExecutor>,
+pub struct CoreMap {
+    pub master_core: MasterExecutor,
+    pub cores: HashMap<CoreId, CoreExecutor>,
 }
 
 /// By default, raw pointers do not implement `Send`. We need a simple
@@ -175,7 +175,7 @@ struct SendablePtr(*mut ffi::rte_mempool);
 unsafe impl std::marker::Send for SendablePtr {}
 
 /// Builder for core map.
-pub(crate) struct CoreMapBuilder<'a> {
+pub struct CoreMapBuilder<'a> {
     app_name: String,
     cores: HashSet<CoreId>,
     master_core: CoreId,
@@ -183,7 +183,7 @@ pub(crate) struct CoreMapBuilder<'a> {
 }
 
 impl<'a> CoreMapBuilder<'a> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         CoreMapBuilder {
             app_name: String::new(),
             cores: Default::default(),
@@ -192,28 +192,28 @@ impl<'a> CoreMapBuilder<'a> {
         }
     }
 
-    pub(crate) fn app_name(&mut self, app_name: &str) -> &mut Self {
+    pub fn app_name(&mut self, app_name: &str) -> &mut Self {
         self.app_name = app_name.to_owned();
         self
     }
 
-    pub(crate) fn cores(&mut self, cores: &[CoreId]) -> &mut Self {
+    pub fn cores(&mut self, cores: &[CoreId]) -> &mut Self {
         self.cores = cores.iter().cloned().collect();
         self
     }
 
-    pub(crate) fn master_core(&mut self, master_core: CoreId) -> &mut Self {
+    pub fn master_core(&mut self, master_core: CoreId) -> &mut Self {
         self.master_core = master_core;
         self
     }
 
-    pub(crate) fn mempools(&'a mut self, mempools: &'a mut [Mempool]) -> &'a mut Self {
+    pub fn mempools(&'a mut self, mempools: &'a mut [Mempool]) -> &'a mut Self {
         self.mempools = MempoolMap::new(mempools);
         self
     }
 
     #[allow(clippy::cognitive_complexity)]
-    pub(crate) fn finish(&'a mut self) -> Result<CoreMap> {
+    pub fn finish(&'a mut self) -> Result<CoreMap> {
         let mut map = HashMap::new();
 
         // first initializes the master core, which the current running

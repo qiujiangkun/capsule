@@ -141,7 +141,7 @@ impl KniTxQueue {
 /// The KNI transmit handle. Because the underlying interface is single
 /// threaded, we must ensure that only one tx handle is created for each
 /// interface.
-pub(crate) struct KniTx {
+pub struct KniTx {
     raw: NonNull<ffi::rte_kni>,
     tx_deque: Option<UnboundedReceiver<Vec<Mbuf>>>,
     #[cfg(feature = "metrics")]
@@ -155,7 +155,7 @@ pub(crate) struct KniTx {
 impl KniTx {
     /// Creates a new `KniTx`.
     #[cfg(not(feature = "metrics"))]
-    pub(crate) fn new(raw: NonNull<ffi::rte_kni>, tx_deque: UnboundedReceiver<Vec<Mbuf>>) -> Self {
+    pub fn new(raw: NonNull<ffi::rte_kni>, tx_deque: UnboundedReceiver<Vec<Mbuf>>) -> Self {
         KniTx {
             raw,
             tx_deque: Some(tx_deque),
@@ -164,7 +164,7 @@ impl KniTx {
 
     /// Creates a new `KniTx` with stats.
     #[cfg(feature = "metrics")]
-    pub(crate) fn new(raw: NonNull<ffi::rte_kni>, tx_deque: UnboundedReceiver<Vec<Mbuf>>) -> Self {
+    pub fn new(raw: NonNull<ffi::rte_kni>, tx_deque: UnboundedReceiver<Vec<Mbuf>>) -> Self {
         let name = unsafe { ffi::rte_kni_get_name(raw.as_ref()).as_str().to_owned() };
         let packets = new_counter("packets", &name, "tx");
         let octets = new_counter("octets", &name, "tx");
@@ -179,7 +179,7 @@ impl KniTx {
     }
 
     /// Sends the packets to the kernel.
-    pub(crate) fn transmit(&mut self, packets: Vec<Mbuf>) {
+    pub fn transmit(&mut self, packets: Vec<Mbuf>) {
         let mut ptrs = packets.into_iter().map(Mbuf::into_ptr).collect::<Vec<_>>();
 
         loop {
@@ -220,7 +220,7 @@ impl KniTx {
     }
 
     /// Converts the TX handle into a spawnable pipeline.
-    pub(crate) fn into_pipeline(mut self) -> impl Future<Output = ()> {
+    pub fn into_pipeline(mut self) -> impl Future<Output = ()> {
         self.tx_deque.take().unwrap().for_each(move |packets| {
             self.transmit(packets);
             future::ready(())
@@ -234,7 +234,7 @@ unsafe impl Send for KniTx {}
 
 /// KNI errors.
 #[derive(Debug, Error)]
-pub(crate) enum KniError {
+pub enum KniError {
     #[error("KNI is not enabled for the port.")]
     Disabled,
 
@@ -250,7 +250,7 @@ pub(crate) enum KniError {
 /// support a multi-queued port with a single virtual interface, a multi
 /// producer, single consumer channel is used to collect all the kernel
 /// bound packets onto one thread for transmit.
-pub(crate) struct Kni {
+pub struct Kni {
     raw: NonNull<ffi::rte_kni>,
     rx: Option<KniRx>,
     tx: Option<KniTx>,
@@ -259,7 +259,7 @@ pub(crate) struct Kni {
 
 impl Kni {
     /// Creates a new KNI.
-    pub(crate) fn new(raw: NonNull<ffi::rte_kni>) -> Kni {
+    pub fn new(raw: NonNull<ffi::rte_kni>) -> Kni {
         let (send, recv) = mpsc::unbounded_channel();
 
         // making 3 clones of the same raw pointer. but we know it is safe
@@ -278,23 +278,23 @@ impl Kni {
     }
 
     /// Takes ownership of the RX handle.
-    pub(crate) fn take_rx(&mut self) -> Result<KniRx> {
+    pub fn take_rx(&mut self) -> Result<KniRx> {
         self.rx.take().ok_or_else(|| KniError::NotAcquired.into())
     }
 
     /// Takes ownership of the TX handle.
-    pub(crate) fn take_tx(&mut self) -> Result<KniTx> {
+    pub fn take_tx(&mut self) -> Result<KniTx> {
         self.tx.take().ok_or_else(|| KniError::NotAcquired.into())
     }
 
     /// Returns a TX queue handle to send packets to kernel.
-    pub(crate) fn txq(&self) -> KniTxQueue {
+    pub fn txq(&self) -> KniTxQueue {
         self.txq.clone()
     }
 
     /// Returns the raw struct needed for FFI calls.
     #[inline]
-    pub(crate) fn raw_mut(&mut self) -> &mut ffi::rte_kni {
+    pub fn raw_mut(&mut self) -> &mut ffi::rte_kni {
         unsafe { self.raw.as_mut() }
     }
 }
@@ -337,7 +337,7 @@ extern "C" fn config_promiscusity(port_id: u16, to_on: u8) -> raw::c_int {
 }
 
 /// Builds a KNI device from the configuration values.
-pub(crate) struct KniBuilder<'a> {
+pub struct KniBuilder<'a> {
     mempool: &'a mut ffi::rte_mempool,
     conf: ffi::rte_kni_conf,
     ops: ffi::rte_kni_ops,
@@ -346,7 +346,7 @@ pub(crate) struct KniBuilder<'a> {
 impl<'a> KniBuilder<'a> {
     /// Creates a new KNI device builder with the mempool for allocating
     /// new packets.
-    pub(crate) fn new(mempool: &'a mut ffi::rte_mempool) -> Self {
+    pub fn new(mempool: &'a mut ffi::rte_mempool) -> Self {
         KniBuilder {
             mempool,
             conf: ffi::rte_kni_conf::default(),
@@ -354,7 +354,7 @@ impl<'a> KniBuilder<'a> {
         }
     }
 
-    pub(crate) fn name(&mut self, name: &str) -> &mut Self {
+    pub fn name(&mut self, name: &str) -> &mut Self {
         unsafe {
             self.conf.name = mem::zeroed();
             ptr::copy(
@@ -366,20 +366,20 @@ impl<'a> KniBuilder<'a> {
         self
     }
 
-    pub(crate) fn port_id(&mut self, port_id: PortId) -> &mut Self {
+    pub fn port_id(&mut self, port_id: PortId) -> &mut Self {
         self.conf.group_id = port_id.raw();
         self.ops.port_id = port_id.raw();
         self
     }
 
-    pub(crate) fn mac_addr(&mut self, mac: MacAddr) -> &mut Self {
+    pub fn mac_addr(&mut self, mac: MacAddr) -> &mut Self {
         unsafe {
             self.conf.mac_addr = mem::transmute(mac);
         }
         self
     }
 
-    pub(crate) fn finish(&mut self) -> Result<Kni> {
+    pub fn finish(&mut self) -> Result<Kni> {
         self.conf.mbuf_size = ffi::RTE_MBUF_DEFAULT_BUF_SIZE;
         self.ops.change_mtu = Some(change_mtu);
         self.ops.config_network_if = Some(config_network_if);
@@ -395,7 +395,7 @@ impl<'a> KniBuilder<'a> {
 }
 
 /// Initializes and preallocates the KNI subsystem.
-pub(crate) fn kni_init(max: usize) -> Result<()> {
+pub fn kni_init(max: usize) -> Result<()> {
     unsafe {
         ffi::rte_kni_init(max as raw::c_uint)
             .into_result(DpdkError::from_errno)
@@ -404,7 +404,7 @@ pub(crate) fn kni_init(max: usize) -> Result<()> {
 }
 
 /// Closes the KNI subsystem.
-pub(crate) fn kni_close() {
+pub fn kni_close() {
     unsafe {
         ffi::rte_kni_close();
     }

@@ -31,7 +31,7 @@ use thiserror::Error;
 
 /// A memory pool is an allocator of message buffers, or `Mbuf`. For best
 /// performance, each socket should have a dedicated `Mempool`.
-pub(crate) struct Mempool {
+pub struct Mempool {
     raw: NonNull<ffi::rte_mempool>,
 }
 
@@ -52,7 +52,7 @@ impl Mempool {
     /// # Errors
     ///
     /// If allocation fails, then `DpdkError` is returned.
-    pub(crate) fn new(capacity: usize, cache_size: usize, socket_id: SocketId) -> Result<Self> {
+    pub fn new(capacity: usize, cache_size: usize, socket_id: SocketId) -> Result<Self> {
         static MEMPOOL_COUNT: AtomicUsize = AtomicUsize::new(0);
         let n = MEMPOOL_COUNT.fetch_add(1, Ordering::Relaxed);
         let name = format!("mempool{}", n);
@@ -75,24 +75,24 @@ impl Mempool {
 
     /// Returns the raw struct needed for FFI calls.
     #[inline]
-    pub(crate) fn raw(&self) -> &ffi::rte_mempool {
+    pub fn raw(&self) -> &ffi::rte_mempool {
         unsafe { self.raw.as_ref() }
     }
 
     /// Returns the raw struct needed for FFI calls.
     #[inline]
-    pub(crate) fn raw_mut(&mut self) -> &mut ffi::rte_mempool {
+    pub fn raw_mut(&mut self) -> &mut ffi::rte_mempool {
         unsafe { self.raw.as_mut() }
     }
 
     /// Returns the name of the `Mempool`.
     #[inline]
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         self.raw().name[..].as_str()
     }
 
     #[cfg(feature = "metrics")]
-    pub(crate) fn stats(&self) -> super::MempoolStats {
+    pub fn stats(&self) -> super::MempoolStats {
         super::MempoolStats::build(self)
     }
 }
@@ -129,7 +129,7 @@ thread_local! {
 
 /// Error indicating the `Mempool` is not found or is exhaused.
 #[derive(Debug, Error)]
-pub(crate) enum MempoolError {
+pub enum MempoolError {
     #[error("Cannot allocate a new mbuf from mempool")]
     Exhausted,
 
@@ -139,13 +139,13 @@ pub(crate) enum MempoolError {
 
 /// A specialized hash map of `SocketId` to `&mut Mempool`.
 #[derive(Debug)]
-pub(crate) struct MempoolMap<'a> {
+pub struct MempoolMap<'a> {
     inner: HashMap<SocketId, &'a mut Mempool>,
 }
 
 impl<'a> MempoolMap<'a> {
     /// Creates a new map from a mutable slice.
-    pub(crate) fn new(mempools: &'a mut [Mempool]) -> Self {
+    pub fn new(mempools: &'a mut [Mempool]) -> Self {
         let map = mempools
             .iter_mut()
             .map(|pool| {
@@ -163,7 +163,7 @@ impl<'a> MempoolMap<'a> {
     /// # Errors
     ///
     /// If the value is not found, `MempoolError::NotFound` is returned.
-    pub(crate) fn get_raw(&mut self, socket_id: SocketId) -> Result<&mut ffi::rte_mempool> {
+    pub fn get_raw(&mut self, socket_id: SocketId) -> Result<&mut ffi::rte_mempool> {
         self.inner
             .get_mut(&socket_id)
             .ok_or_else(|| MempoolError::NotFound(socket_id).into())

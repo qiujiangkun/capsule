@@ -37,7 +37,7 @@ const DEFAULT_RSS_HF: u64 =
 
 /// An opaque identifier for an Ethernet device port.
 #[derive(Copy, Clone)]
-pub(crate) struct PortId(u16);
+pub struct PortId(u16);
 
 impl PortId {
     /// Returns the ID of the socket the port is connected to.
@@ -46,7 +46,7 @@ impl PortId {
     /// will be discarded if it does not match any of the system's physical
     /// socket IDs.
     #[inline]
-    pub(crate) fn socket_id(self) -> Option<SocketId> {
+    pub fn socket_id(self) -> Option<SocketId> {
         let id = unsafe { SocketId(ffi::rte_eth_dev_socket_id(self.0)) };
         if SocketId::all().contains(&id) {
             Some(id)
@@ -58,7 +58,7 @@ impl PortId {
     /// Returns the raw value needed for FFI calls.
     #[allow(clippy::trivially_copy_pass_by_ref)]
     #[inline]
-    pub(crate) fn raw(&self) -> u16 {
+    pub fn raw(&self) -> u16 {
         self.0
     }
 }
@@ -71,33 +71,33 @@ impl fmt::Debug for PortId {
 
 /// The index of a receive queue.
 #[derive(Copy, Clone)]
-pub(crate) struct RxQueueIndex(u16);
+pub struct RxQueueIndex(u16);
 
 impl RxQueueIndex {
     /// Returns the raw value needed for FFI calls.
     #[allow(clippy::trivially_copy_pass_by_ref, dead_code)]
     #[inline]
-    pub(crate) fn raw(&self) -> u16 {
+    pub fn raw(&self) -> u16 {
         self.0
     }
 }
 
 /// The index of a transmit queue.
 #[derive(Copy, Clone)]
-pub(crate) struct TxQueueIndex(u16);
+pub struct TxQueueIndex(u16);
 
 impl TxQueueIndex {
     /// Returns the raw value needed for FFI calls.
     #[allow(clippy::trivially_copy_pass_by_ref, dead_code)]
     #[inline]
-    pub(crate) fn raw(&self) -> u16 {
+    pub fn raw(&self) -> u16 {
         self.0
     }
 }
 
 /// Either queue type (receive or transmit) with associated index.
 #[allow(dead_code)]
-pub(crate) enum RxTxQueue {
+pub enum RxTxQueue {
     Rx(RxQueueIndex),
     Tx(TxQueueIndex),
 }
@@ -146,7 +146,7 @@ impl PortQueue {
     }
     /// Receives a burst of packets from the receive queue, up to a maximum
     /// of 32 packets.
-    pub(crate) fn receive(&self) -> Vec<Mbuf> {
+    pub fn receive(&self) -> Vec<Mbuf> {
         const RX_BURST_MAX: usize = 32;
         let mut ptrs = Vec::with_capacity(RX_BURST_MAX);
 
@@ -171,7 +171,7 @@ impl PortQueue {
     }
 
     /// Sends the packets to the transmit queue.
-    pub(crate) fn transmit(&self, packets: Vec<Mbuf>) {
+    pub fn transmit(&self, packets: Vec<Mbuf>) {
         let mut ptrs = packets.into_iter().map(Mbuf::into_ptr).collect::<Vec<_>>();
 
         loop {
@@ -259,7 +259,7 @@ impl PortQueue {
 
 /// Error indicating failed to initialize the port.
 #[derive(Debug, Error)]
-pub(crate) enum PortError {
+pub enum PortError {
     /// Port is not found.
     #[error("Port {0} is not found.")]
     NotFound(String),
@@ -279,7 +279,7 @@ pub(crate) enum PortError {
 }
 
 /// An Ethernet device port.
-pub(crate) struct Port {
+pub struct Port {
     id: PortId,
     name: String,
     device: String,
@@ -290,7 +290,7 @@ pub(crate) struct Port {
 
 impl Port {
     /// Returns the port id.
-    pub(crate) fn id(&self) -> PortId {
+    pub fn id(&self) -> PortId {
         self.id
     }
 
@@ -298,22 +298,22 @@ impl Port {
     ///
     /// For applications with more than one port, this name can be used to
     /// identifer the port.
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         self.name.as_str()
     }
 
     /// Returns the MAC address of the port.
-    pub(crate) fn mac_addr(&self) -> MacAddr {
+    pub fn mac_addr(&self) -> MacAddr {
         super::eth_macaddr_get(self.id.0)
     }
 
     /// Returns the available port queues.
-    pub(crate) fn queues(&self) -> &HashMap<CoreId, PortQueue> {
+    pub fn queues(&self) -> &HashMap<CoreId, PortQueue> {
         &self.queues
     }
 
     /// Returns the KNI.
-    pub(crate) fn kni(&mut self) -> Option<&mut Kni> {
+    pub fn kni(&mut self) -> Option<&mut Kni> {
         self.kni.as_mut()
     }
 
@@ -324,7 +324,7 @@ impl Port {
     /// # Errors
     ///
     /// If the port fails to start, `DpdkError` is returned.
-    pub(crate) fn start(&mut self) -> Result<()> {
+    pub fn start(&mut self) -> Result<()> {
         unsafe {
             ffi::rte_eth_dev_start(self.id.0).into_result(DpdkError::from_errno)?;
         }
@@ -334,7 +334,7 @@ impl Port {
     }
 
     /// Stops the port.
-    pub(crate) fn stop(&mut self) {
+    pub fn stop(&mut self) {
         unsafe {
             ffi::rte_eth_dev_stop(self.id.0);
         }
@@ -343,7 +343,7 @@ impl Port {
     }
 
     #[cfg(feature = "metrics")]
-    pub(crate) fn stats(&self) -> super::PortStats {
+    pub fn stats(&self) -> super::PortStats {
         super::PortStats::build(self)
     }
 }
@@ -376,7 +376,7 @@ impl Drop for Port {
 }
 
 /// Builds a port from the configuration values.
-pub(crate) struct PortBuilder<'a> {
+pub struct PortBuilder<'a> {
     name: String,
     device: String,
     port_id: PortId,
@@ -397,7 +397,7 @@ impl<'a> PortBuilder<'a> {
     /// # Errors
     ///
     /// If the device is not found, `DpdkError` is returned.
-    pub(crate) fn new(name: String, device: String) -> Result<Self> {
+    pub fn new(name: String, device: String) -> Result<Self> {
         let mut port_id = 0u16;
         unsafe {
             ffi::rte_eth_dev_get_port_by_name(device.clone().into_cstring().as_ptr(), &mut port_id)
@@ -433,7 +433,7 @@ impl<'a> PortBuilder<'a> {
     ///
     /// If either the maximum number of RX or TX queues is less than the
     /// number of cores assigned, `PortError` is returned.
-    pub(crate) fn cores(&mut self, cores: &[CoreId]) -> Result<&mut Self> {
+    pub fn cores(&mut self, cores: &[CoreId]) -> Result<&mut Self> {
         ensure!(!cores.is_empty(), PortError::CoreNotBound);
 
         let mut cores = cores.to_vec();
@@ -463,7 +463,7 @@ impl<'a> PortBuilder<'a> {
     /// # Errors
     ///
     /// If the adjustment failed, `DpdkError` is returned.
-    pub(crate) fn rx_tx_queue_capacity(&mut self, rxd: usize, txd: usize) -> Result<&mut Self> {
+    pub fn rx_tx_queue_capacity(&mut self, rxd: usize, txd: usize) -> Result<&mut Self> {
         let mut rxd2 = rxd as u16;
         let mut txd2 = txd as u16;
 
@@ -491,14 +491,14 @@ impl<'a> PortBuilder<'a> {
     }
 
     /// Sets the available mempools.
-    pub(crate) fn mempools(&'a mut self, mempools: &'a mut [Mempool]) -> &'a mut Self {
+    pub fn mempools(&'a mut self, mempools: &'a mut [Mempool]) -> &'a mut Self {
         self.mempools = MempoolMap::new(mempools);
         self
     }
 
     /// Creates the `Port`.
     #[allow(clippy::cognitive_complexity)]
-    pub(crate) fn finish(
+    pub fn finish(
         &mut self,
         promiscuous: bool,
         multicast: bool,

@@ -161,7 +161,7 @@ fn format_pcap_file(port_name: &str, core_id: usize, tx_or_rx: &str) -> String {
 }
 
 /// Generate PCAP files for rx/tx queues per port and per core.
-pub(crate) fn capture_queue(
+pub fn capture_queue(
     port_id: PortId,
     port_name: &str,
     core: CoreId,
