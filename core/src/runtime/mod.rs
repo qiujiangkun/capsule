@@ -68,11 +68,11 @@ pub enum UnixSignal {
 /// The runtime initializes the underlying DPDK environment, and it also manages
 /// the task scheduler that executes the packet processing pipelines.
 pub struct Runtime {
-    ports: ManuallyDrop<Vec<Port>>,
-    mempools: ManuallyDrop<Vec<Mempool>>,
-    core_map: CoreMap,
-    on_signal: Arc<dyn Fn(UnixSignal) -> bool>,
-    config: RuntimeConfig,
+    pub ports: ManuallyDrop<Vec<Port>>,
+    pub mempools: ManuallyDrop<Vec<Mempool>>,
+    pub core_map: CoreMap,
+    pub on_signal: Arc<dyn Fn(UnixSignal) -> bool>,
+    pub config: RuntimeConfig,
 }
 
 impl Runtime {
@@ -411,6 +411,28 @@ impl Runtime {
                 pipeline.run_once();
                 future::ready(())
             });
+            current_thread::spawn(fut);
+        }))?;
+
+        info!("installed periodic pipeline for {:?}.", core_id);
+
+        Ok(self)
+    }
+
+    pub fn add_spin_task<Fut, F>(&mut self, core: usize, installer: F) -> Result<&mut Self>
+        where
+            F: FnOnce(HashMap<String, PortQueue>) -> Fut + Send + 'static,
+            Fut: futures::Future<Output=()> + 'static
+    {
+        let core_id = CoreId::new(core);
+        let thread = &self.get_core(core_id)?.thread;
+        let port_qs = self.get_port_qs(core_id)?;
+
+        // spawns the bootstrap. we want the bootstrapping to execute on the
+        // target core instead of the master core so the periodic task is
+        // associated with the correct timer instance.
+        thread.spawn(future::lazy(move |_| {
+            let fut = installer(port_qs);
             current_thread::spawn(fut);
         }))?;
 

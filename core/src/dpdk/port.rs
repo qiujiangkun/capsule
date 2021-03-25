@@ -280,12 +280,12 @@ pub enum PortError {
 
 /// An Ethernet device port.
 pub struct Port {
-    id: PortId,
-    name: String,
-    device: String,
-    queues: HashMap<CoreId, PortQueue>,
-    kni: Option<Kni>,
-    dev_info: ffi::rte_eth_dev_info,
+    pub id: PortId,
+    pub name: String,
+    pub device: String,
+    pub queues: HashMap<CoreId, PortQueue>,
+    pub kni: Option<Kni>,
+    pub dev_info: ffi::rte_eth_dev_info,
 }
 
 impl Port {
