@@ -16,11 +16,11 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
+// missing_debug_implementations,
+// missing_docs,
+// unreachable_pub
 #![warn(
-    missing_debug_implementations,
-    missing_docs,
     rust_2018_idioms,
-    unreachable_pub
 )]
 #![deny(broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -124,7 +124,7 @@ extern crate self as capsule;
 pub mod batch;
 pub mod config;
 mod dpdk;
-mod ffi;
+pub mod ffi;
 mod macros;
 #[cfg(feature = "metrics")]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "default", feature = "metrics"))))]
@@ -139,8 +139,8 @@ mod runtime;
 #[cfg_attr(docsrs, doc(cfg(feature = "testils")))]
 pub mod testils;
 
-pub use self::dpdk::{KniRx, KniTxQueue, Mbuf, PortQueue, SizeOf};
-pub use self::runtime::{Runtime, UnixSignal};
+pub use self::dpdk::*;
+pub use self::runtime::*;
 pub use capsule_macros::SizeOf;
 #[cfg(any(test, feature = "testils"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "testils")))]
