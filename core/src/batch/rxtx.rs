@@ -34,7 +34,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 impl PacketRx for PortQueue {
     fn receive(&mut self) -> Vec<Mbuf> {
-        PortQueue::receive(self)
+        self.receive_one().into_iter().collect()
     }
 }
 

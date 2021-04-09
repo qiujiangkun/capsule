@@ -16,24 +16,38 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
-use super::{CoreId, Kni, KniBuilder, KniTxQueue, Mbuf, Mempool, MempoolMap, SocketId};
+use super::CoreId;
+use super::Kni;
+use super::KniBuilder;
+use super::KniTxQueue;
+use super::Mbuf;
+use super::Mempool;
+use super::MempoolMap;
+use super::SocketId;
+use crate::debug;
 use crate::dpdk::DpdkError;
-use crate::ffi::{self, AsStr, ToCString, ToResult};
-#[cfg(feature = "metrics")]
-use crate::metrics::{labels, Counter, SINK};
+use crate::ensure;
+use crate::ffi::AsStr;
+use crate::ffi::ToCString;
+use crate::ffi::ToResult;
+use crate::ffi::{self};
+use crate::info;
+use crate::metrics::labels;
+use crate::metrics::Counter;
+use crate::metrics::SINK;
 use crate::net::MacAddr;
 #[cfg(feature = "pcap-dump")]
 use crate::pcap;
-use crate::{debug, ensure, info, warn};
+use crate::warn;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fmt;
+use std::mem::MaybeUninit;
 use std::os::raw;
 use std::ptr;
 use thiserror::Error;
 
-const DEFAULT_RSS_HF: u64 =
-    (ffi::ETH_RSS_IP | ffi::ETH_RSS_TCP | ffi::ETH_RSS_UDP | ffi::ETH_RSS_SCTP) as u64;
+const DEFAULT_RSS_HF: u64 = (ffi::ETH_RSS_IP | ffi::ETH_RSS_TCP | ffi::ETH_RSS_UDP | ffi::ETH_RSS_SCTP) as u64;
 
 /// An opaque identifier for an Ethernet device port.
 #[derive(Copy, Clone)]
@@ -58,15 +72,11 @@ impl PortId {
     /// Returns the raw value needed for FFI calls.
     #[allow(clippy::trivially_copy_pass_by_ref)]
     #[inline]
-    pub fn raw(&self) -> u16 {
-        self.0
-    }
+    pub fn raw(&self) -> u16 { self.0 }
 }
 
 impl fmt::Debug for PortId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "port{}", self.0)
-    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "port{}", self.0) }
 }
 
 /// The index of a receive queue.
@@ -77,9 +87,7 @@ impl RxQueueIndex {
     /// Returns the raw value needed for FFI calls.
     #[allow(clippy::trivially_copy_pass_by_ref, dead_code)]
     #[inline]
-    pub fn raw(&self) -> u16 {
-        self.0
-    }
+    pub fn raw(&self) -> u16 { self.0 }
 }
 
 /// The index of a transmit queue.
@@ -90,9 +98,7 @@ impl TxQueueIndex {
     /// Returns the raw value needed for FFI calls.
     #[allow(clippy::trivially_copy_pass_by_ref, dead_code)]
     #[inline]
-    pub fn raw(&self) -> u16 {
-        self.0
-    }
+    pub fn raw(&self) -> u16 { self.0 }
 }
 
 /// Either queue type (receive or transmit) with associated index.
@@ -107,7 +113,6 @@ pub enum RxTxQueue {
 /// as a queue pair associated with the core that runs the pipeline from
 /// receive to send.
 #[allow(missing_debug_implementations)]
-#[derive(Clone)]
 pub struct PortQueue {
     port_id: PortId,
     rxq: RxQueueIndex,
@@ -119,54 +124,81 @@ pub struct PortQueue {
     transmitted: Option<Counter>,
     #[cfg(feature = "metrics")]
     dropped: Option<Counter>,
+    received_bufs: Vec<MaybeUninit<Mbuf>>,
+    received_bufs_ptr: Vec<*mut ffi::rte_mbuf>,
+    received_index_l: usize,
+    received_index_h: usize,
+}
+
+impl Clone for PortQueue {
+    fn clone(&self) -> Self {
+        Self {
+            port_id: self.port_id.clone(),
+            rxq: self.rxq.clone(),
+            txq: self.txq.clone(),
+            kni: self.kni.clone(),
+            #[cfg(feature = "metrics")]
+            received: self.received.clone(),
+            #[cfg(feature = "metrics")]
+            transmitted: self.transmitted.clone(),
+            #[cfg(feature = "metrics")]
+            dropped: self.dropped.clone(),
+            received_bufs: (0..Self::RX_BURST_MAX).map(|_| MaybeUninit::uninit()).collect(),
+            received_bufs_ptr: vec![ptr::null_mut(); Self::RX_BURST_MAX],
+            received_index_l: 0,
+            received_index_h: 0,
+        }
+    }
 }
 
 impl PortQueue {
-    #[cfg(not(feature = "metrics"))]
+    const RX_BURST_MAX: usize = 32;
+
     fn new(port: PortId, rxq: RxQueueIndex, txq: TxQueueIndex) -> Self {
         PortQueue {
             port_id: port,
             rxq,
             txq,
             kni: None,
+            #[cfg(feature = "metrics")]
+            received: None,
+            #[cfg(feature = "metrics")]
+            transmitted: None,
+            #[cfg(feature = "metrics")]
+            dropped: None,
+            received_bufs: (0..Self::RX_BURST_MAX).map(|_| MaybeUninit::uninit()).collect(),
+            received_bufs_ptr: vec![ptr::null_mut(); Self::RX_BURST_MAX],
+            received_index_l: 0,
+            received_index_h: 0,
         }
     }
 
-    #[cfg(feature = "metrics")]
-    fn new(port: PortId, rxq: RxQueueIndex, txq: TxQueueIndex) -> Self {
-        PortQueue {
-            port_id: port,
-            rxq,
-            txq,
-            kni: None,
-            received: None,
-            transmitted: None,
-            dropped: None,
-        }
-    }
     /// Receives a burst of packets from the receive queue, up to a maximum
     /// of 32 packets.
-    pub fn receive(&self) -> Vec<Mbuf> {
-        const RX_BURST_MAX: usize = 32;
-        let mut ptrs = Vec::with_capacity(RX_BURST_MAX);
+    /// Returns one received frame and its ownership
+    pub fn receive_one(&mut self) -> Option<Mbuf> {
+        if self.received_index_l == self.received_index_h {
+            let len = unsafe { ffi::_rte_eth_rx_burst(self.port_id.0, self.rxq.0, self.received_bufs_ptr.as_mut_ptr(), Self::RX_BURST_MAX as u16) };
+            if len == 0 {
+                return None;
+            }
+            #[cfg(feature = "metrics")]
+                self.received.as_ref().unwrap().record(len as u64);
 
-        let len = unsafe {
-            ffi::_rte_eth_rx_burst(
-                self.port_id.0,
-                self.rxq.0,
-                ptrs.as_mut_ptr(),
-                RX_BURST_MAX as u16,
-            )
-        };
+            self.received_index_l = 0;
+            self.received_index_h = len as _;
 
-        #[cfg(feature = "metrics")]
-        self.received.as_ref().unwrap().record(len as u64);
+            unsafe {
+                for i in 0..len as usize {
+                    self.received_bufs[i] = MaybeUninit::new(Mbuf::from_ptr(self.received_bufs_ptr[i]));
+                }
+            }
+        }
 
         unsafe {
-            ptrs.set_len(len as usize);
-            ptrs.into_iter()
-                .map(|ptr| Mbuf::from_ptr(ptr))
-                .collect::<Vec<_>>()
+            let buf = self.received_bufs[self.received_index_l].as_ptr().read();
+            self.received_index_l += 1;
+            Some(buf)
         }
     }
 
@@ -176,13 +208,11 @@ impl PortQueue {
 
         loop {
             let to_send = ptrs.len() as u16;
-            let sent = unsafe {
-                ffi::_rte_eth_tx_burst(self.port_id.0, self.txq.0, ptrs.as_mut_ptr(), to_send)
-            };
+            let sent = unsafe { ffi::_rte_eth_tx_burst(self.port_id.0, self.txq.0, ptrs.as_mut_ptr(), to_send) };
 
             if sent > 0 {
                 #[cfg(feature = "metrics")]
-                self.transmitted.as_ref().unwrap().record(sent as u64);
+                    self.transmitted.as_ref().unwrap().record(sent as u64);
 
                 if to_send - sent > 0 {
                     // still have packets not sent. tx queue is full but still making
@@ -196,7 +226,7 @@ impl PortQueue {
                 // tx queue is full and we can't make progress, start dropping packets
                 // to avoid potentially stuck in an endless loop.
                 #[cfg(feature = "metrics")]
-                self.dropped.as_ref().unwrap().record(ptrs.len() as u64);
+                    self.dropped.as_ref().unwrap().record(ptrs.len() as u64);
 
                 super::mbuf_free_bulk(ptrs);
                 break;
@@ -205,14 +235,10 @@ impl PortQueue {
     }
 
     /// Returns a handle to send packets to the associated KNI interface.
-    pub fn kni(&self) -> Option<&KniTxQueue> {
-        self.kni.as_ref()
-    }
+    pub fn kni(&self) -> Option<&KniTxQueue> { self.kni.as_ref() }
 
     /// Sets the TX queue for the KNI interface.
-    fn set_kni(&mut self, kni: KniTxQueue) {
-        self.kni = Some(kni);
-    }
+    fn set_kni(&mut self, kni: KniTxQueue) { self.kni = Some(kni); }
 
     /// Sets the per queue counters. Some device drivers don't track TX
     /// and RX packets per queue. Instead we will track them here for all
@@ -252,8 +278,16 @@ impl PortQueue {
     }
 
     /// Returns the MAC address of the port.
-    pub fn mac_addr(&self) -> MacAddr {
-        super::eth_macaddr_get(self.port_id.0)
+    pub fn mac_addr(&self) -> MacAddr { super::eth_macaddr_get(self.port_id.0) }
+}
+unsafe impl Send for PortQueue {}
+impl Drop for PortQueue {
+    fn drop(&mut self) {
+        for i in self.received_index_l..self.received_index_h {
+            unsafe {
+                std::ptr::drop_in_place(self.received_bufs[i].as_mut_ptr());
+            }
+        }
     }
 }
 
@@ -290,32 +324,22 @@ pub struct Port {
 
 impl Port {
     /// Returns the port id.
-    pub fn id(&self) -> PortId {
-        self.id
-    }
+    pub fn id(&self) -> PortId { self.id }
 
     /// Returns the application assigned logical name of the port.
     ///
     /// For applications with more than one port, this name can be used to
     /// identifer the port.
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
+    pub fn name(&self) -> &str { self.name.as_str() }
 
     /// Returns the MAC address of the port.
-    pub fn mac_addr(&self) -> MacAddr {
-        super::eth_macaddr_get(self.id.0)
-    }
+    pub fn mac_addr(&self) -> MacAddr { super::eth_macaddr_get(self.id.0) }
 
     /// Returns the available port queues.
-    pub fn queues(&self) -> &HashMap<CoreId, PortQueue> {
-        &self.queues
-    }
+    pub fn queues(&self) -> &HashMap<CoreId, PortQueue> { &self.queues }
 
     /// Returns the KNI.
-    pub fn kni(&mut self) -> Option<&mut Kni> {
-        self.kni.as_mut()
-    }
+    pub fn kni(&mut self) -> Option<&mut Kni> { self.kni.as_mut() }
 
     /// Starts the port. This is the final step before packets can be
     /// received or transmitted on this port. Promiscuous mode is also
@@ -343,9 +367,7 @@ impl Port {
     }
 
     #[cfg(feature = "metrics")]
-    pub fn stats(&self) -> super::PortStats {
-        super::PortStats::build(self)
-    }
+    pub fn stats(&self) -> super::PortStats { super::PortStats::build(self) }
 }
 
 impl fmt::Debug for Port {
@@ -400,8 +422,7 @@ impl<'a> PortBuilder<'a> {
     pub fn new(name: String, device: String) -> Result<Self> {
         let mut port_id = 0u16;
         unsafe {
-            ffi::rte_eth_dev_get_port_by_name(device.clone().into_cstring().as_ptr(), &mut port_id)
-                .into_result(DpdkError::from_errno)?;
+            ffi::rte_eth_dev_get_port_by_name(device.clone().into_cstring().as_ptr(), &mut port_id).into_result(DpdkError::from_errno)?;
         }
 
         let port_id = PortId(port_id);
@@ -441,14 +462,8 @@ impl<'a> PortBuilder<'a> {
         cores.dedup();
         let len = cores.len() as u16;
 
-        ensure!(
-            self.dev_info.max_rx_queues >= len,
-            PortError::InsufficientRxQueues(self.dev_info.max_rx_queues as usize)
-        );
-        ensure!(
-            self.dev_info.max_tx_queues >= len,
-            PortError::InsufficientTxQueues(self.dev_info.max_tx_queues as usize)
-        );
+        ensure!(self.dev_info.max_rx_queues >= len, PortError::InsufficientRxQueues(self.dev_info.max_rx_queues as usize));
+        ensure!(self.dev_info.max_tx_queues >= len, PortError::InsufficientTxQueues(self.dev_info.max_tx_queues as usize));
 
         self.cores = cores;
         Ok(self)
@@ -468,22 +483,11 @@ impl<'a> PortBuilder<'a> {
         let mut txd2 = txd as u16;
 
         unsafe {
-            ffi::rte_eth_dev_adjust_nb_rx_tx_desc(self.port_id.0, &mut rxd2, &mut txd2)
-                .into_result(DpdkError::from_errno)?;
+            ffi::rte_eth_dev_adjust_nb_rx_tx_desc(self.port_id.0, &mut rxd2, &mut txd2).into_result(DpdkError::from_errno)?;
         }
 
-        info!(
-            cond: rxd2 != rxd as u16,
-            message = "adjusted rxd.",
-            before = rxd,
-            after = rxd2
-        );
-        info!(
-            cond: txd2 != txd as u16,
-            message = "adjusted txd.",
-            before = txd,
-            after = txd2
-        );
+        info!(cond: rxd2 != rxd as u16, message = "adjusted rxd.", before = rxd, after = rxd2);
+        info!(cond: txd2 != txd as u16, message = "adjusted txd.", before = txd, after = txd2);
 
         self.rxd = rxd2;
         self.txd = txd2;
@@ -498,20 +502,14 @@ impl<'a> PortBuilder<'a> {
 
     /// Creates the `Port`.
     #[allow(clippy::cognitive_complexity)]
-    pub fn finish(
-        &mut self,
-        promiscuous: bool,
-        multicast: bool,
-        with_kni: bool,
-    ) -> anyhow::Result<Port> {
+    pub fn finish(&mut self, promiscuous: bool, multicast: bool, with_kni: bool) -> anyhow::Result<Port> {
         let len = self.cores.len() as u16;
         let mut conf = ffi::rte_eth_conf::default();
 
         // turns on receive side scaling if port has multiple cores.
         if len > 1 {
             conf.rxmode.mq_mode = ffi::rte_eth_rx_mq_mode::ETH_MQ_RX_RSS;
-            conf.rx_adv_conf.rss_conf.rss_hf =
-                DEFAULT_RSS_HF & self.dev_info.flow_type_rss_offloads;
+            conf.rx_adv_conf.rss_conf.rss_hf = DEFAULT_RSS_HF & self.dev_info.flow_type_rss_offloads;
         }
 
         // turns on optimization for fast release of mbufs.
@@ -522,16 +520,12 @@ impl<'a> PortBuilder<'a> {
 
         // must configure the device first before everything else.
         unsafe {
-            ffi::rte_eth_dev_configure(self.port_id.0, len, len, &conf)
-                .into_result(DpdkError::from_errno)?;
+            ffi::rte_eth_dev_configure(self.port_id.0, len, len, &conf).into_result(DpdkError::from_errno)?;
         }
 
         // if the port is virtual, we will allocate it to the socket of
         // the first assigned core.
-        let socket_id = self
-            .port_id
-            .socket_id()
-            .unwrap_or_else(|| self.cores[0].socket_id());
+        let socket_id = self.port_id.socket_id().unwrap_or_else(|| self.cores[0].socket_id());
         debug!("{} connected to {:?}.", self.name, socket_id);
 
         // the socket determines which pool to allocate mbufs from.
@@ -567,46 +561,21 @@ impl<'a> PortBuilder<'a> {
             // configures the RX queue with defaults
             let rxq = RxQueueIndex(idx as u16);
             unsafe {
-                ffi::rte_eth_rx_queue_setup(
-                    self.port_id.0,
-                    rxq.0,
-                    self.rxd,
-                    socket_id.0 as raw::c_uint,
-                    ptr::null(),
-                    mempool,
-                )
-                .into_result(DpdkError::from_errno)?;
+                ffi::rte_eth_rx_queue_setup(self.port_id.0, rxq.0, self.rxd, socket_id.0 as raw::c_uint, ptr::null(), mempool).into_result(DpdkError::from_errno)?;
             }
 
             // configures the TX queue with defaults
             let txq = TxQueueIndex(idx as u16);
             unsafe {
-                ffi::rte_eth_tx_queue_setup(
-                    self.port_id.0,
-                    txq.0,
-                    self.txd,
-                    socket_id.0 as raw::c_uint,
-                    ptr::null(),
-                )
-                .into_result(DpdkError::from_errno)?;
+                ffi::rte_eth_tx_queue_setup(self.port_id.0, txq.0, self.txd, socket_id.0 as raw::c_uint, ptr::null()).into_result(DpdkError::from_errno)?;
             }
 
             #[cfg(feature = "pcap-dump")]
-            {
-                pcap::capture_queue(
-                    self.port_id,
-                    self.name.as_str(),
-                    core_id,
-                    RxTxQueue::Rx(rxq),
-                )?;
+                {
+                    pcap::capture_queue(self.port_id, self.name.as_str(), core_id, RxTxQueue::Rx(rxq))?;
 
-                pcap::capture_queue(
-                    self.port_id,
-                    self.name.as_str(),
-                    core_id,
-                    RxTxQueue::Tx(txq),
-                )?;
-            }
+                    pcap::capture_queue(self.port_id, self.name.as_str(), core_id, RxTxQueue::Tx(txq))?;
+                }
 
             let mut q = PortQueue::new(self.port_id, rxq, txq);
 
@@ -615,7 +584,7 @@ impl<'a> PortBuilder<'a> {
             }
 
             #[cfg(feature = "metrics")]
-            q.set_counters(&self.name, core_id);
+                q.set_counters(&self.name, core_id);
 
             queues.insert(core_id, q);
             debug!("initialized port queue for {:?}.", core_id);
