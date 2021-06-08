@@ -166,12 +166,22 @@ static RTE_PMD_LIBS: &[&str] = &[
 
 #[cfg(not(feature = "rustdoc"))]
 const RTE_DEPS_LIBS: &[&str] = &["numa", "pcap"];
-
+#[cfg(not(feature = "rustdoc"))]
+fn march_flag() -> &'static str {
+    let target = std::env::var("TARGET").unwrap();
+    if target.starts_with("x86_64") {
+        "-march=corei7-avx"
+    } else if target.starts_with("aarch") {
+        "-march=armv8-a"
+    } else {
+        "-march=native"
+    }
+}
 #[cfg(not(feature = "rustdoc"))]
 fn bind(path: &Path) {
     cc::Build::new()
         .file("src/shim.c")
-        // .flag("-march=corei7-avx")
+        .flag(march_flag())
         .compile("rte_shim");
 
     bindgen::Builder::default()
@@ -190,7 +200,7 @@ fn bind(path: &Path) {
         .derive_partialeq(true)
         .default_enum_style(bindgen::EnumVariation::ModuleConsts)
         .clang_arg("-finline-functions")
-        // .clang_arg("-march=corei7-avx")
+        .clang_arg(march_flag())
         .rustfmt_bindings(true)
         .generate()
         .expect("Unable to generate bindings")
