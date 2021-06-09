@@ -16,43 +16,12 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
-//! Toml-based configuration for use with Capsule applications.
-//!
-//! # Example
-//!
-//! A configuration from our [`pktdump`] example:
-//! ```
-//! app_name = "pktdump"
-//! master_core = 0
-//! duration = 5
-//!
-//! [mempool]
-//!     capacity = 65535
-//!     cache_size = 256
-//!
-//! [[ports]]
-//!     name = "eth1"
-//!     device = "net_pcap0"
-//!     args = "rx_pcap=tcp4.pcap,tx_iface=lo"
-//!     cores = [0]
-//!
-//! [[ports]]
-//!     name = "eth2"
-//!     device = "net_pcap1"
-//!     args = "rx_pcap=tcp6.pcap,tx_iface=lo"
-//!     cores = [0]
-//! ```
-//!
-//! [`pktdump`]: https://github.com/capsule-rs/capsule/tree/master/examples/pktdump
-
 use crate::dpdk::CoreId;
 use crate::net::{Ipv4Cidr, Ipv6Cidr, MacAddr};
 use anyhow::Result;
-use clap::{clap_app, crate_version};
 use regex::Regex;
 use serde::{de, Deserialize, Deserializer};
 use std::fmt;
-use std::fs;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -402,112 +371,5 @@ impl fmt::Debug for PortConfig {
             .field("multicast", &self.multicast)
             .field("kni", &self.kni)
             .finish()
-    }
-}
-
-/// Loads the app config from a TOML file.
-///
-/// # Example
-///
-/// ```
-/// home$ ./myapp -f config.toml
-/// ```
-pub fn load_config() -> Result<RuntimeConfig> {
-    let matches = clap_app!(capsule =>
-        (version: crate_version!())
-        (@arg file: -f --file +required +takes_value "configuration file")
-    )
-    .get_matches();
-
-    let path = matches.value_of("file").unwrap();
-    let content = fs::read_to_string(path)?;
-    toml::from_str(&content).map_err(|err| err.into())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn config_defaults() {
-        const CONFIG: &str = r#"
-            app_name = "myapp"
-            master_core = 0
-
-            [[ports]]
-                name = "eth0"
-                device = "0000:00:01.0"
-                cores = [2, 3]
-        "#;
-
-        let config: RuntimeConfig = toml::from_str(CONFIG).unwrap();
-
-        assert_eq!(false, config.secondary);
-        assert_eq!(None, config.app_group);
-        assert!(config.cores.is_empty());
-        assert_eq!(None, config.dpdk_args);
-        assert_eq!(default_capacity(), config.mempool.capacity);
-        assert_eq!(default_cache_size(), config.mempool.cache_size);
-        assert_eq!(None, config.ports[0].args);
-        assert_eq!(default_port_rxd(), config.ports[0].rxd);
-        assert_eq!(default_port_txd(), config.ports[0].txd);
-        assert_eq!(false, config.ports[0].promiscuous);
-        assert_eq!(default_multicast_mode(), config.ports[0].multicast);
-        assert_eq!(false, config.ports[0].kni);
-    }
-
-    #[test]
-    fn config_to_eal_args() {
-        const CONFIG: &str = r#"
-            app_name = "myapp"
-            secondary = false
-            app_group = "mygroup"
-            master_core = 0
-            cores = [1]
-            dpdk_args = "-v --log-level eal:8"
-
-            [mempool]
-                capacity = 255
-                cache_size = 16
-
-            [[ports]]
-                name = "eth0"
-                device = "0000:00:01.0"
-                cores = [2, 3]
-                rxd = 32
-                txd = 32
-
-            [[ports]]
-                name = "eth1"
-                device = "net_pcap0"
-                args = "rx=lo,tx=lo"
-                cores = [0, 4]
-                rxd = 32
-                txd = 32
-        "#;
-
-        let config: RuntimeConfig = toml::from_str(CONFIG).unwrap();
-
-        assert_eq!(
-            &[
-                "myapp",
-                "--proc-type",
-                "primary",
-                "--file-prefix",
-                "mygroup",
-                "--pci-whitelist",
-                "0000:00:01.0",
-                "--vdev",
-                "net_pcap0,rx=lo,tx=lo",
-                "--master-lcore",
-                "0",
-                "-l",
-                "0",
-                "-v",
-                "--log-level",
-                "eal:8"
-            ],
-            config.to_eal_args().as_slice(),
-        )
     }
 }

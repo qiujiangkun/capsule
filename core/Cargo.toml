@@ -23,7 +23,6 @@ doctest = false
 anyhow = "1.0"
 capsule-ffi = { version = "0.1.5", path = "../ffi" }
 capsule-macros = { version = "0.1.5", path = "../macros" }
-clap = "2.33"
 criterion = { version = "0.3", optional = true }
 futures-preview = "=0.3.0-alpha.19"
 libc = "0.2"

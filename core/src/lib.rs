@@ -19,9 +19,7 @@
 // missing_debug_implementations,
 // missing_docs,
 // unreachable_pub
-#![warn(
-    rust_2018_idioms,
-)]
+#![warn(rust_2018_idioms)]
 #![deny(broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc(html_root_url = "https://docs.rs/capsule/0.1.5")]
@@ -131,13 +129,11 @@ pub mod packets;
 #[cfg(feature = "pcap-dump")]
 #[cfg_attr(docsrs, doc(cfg(feature = "pcap-dump")))]
 mod pcap;
-mod runtime;
 #[cfg(any(test, feature = "testils"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "testils")))]
 pub mod testils;
 
 pub use self::dpdk::*;
-pub use self::runtime::*;
 pub use capsule_macros::SizeOf;
 #[cfg(any(test, feature = "testils"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "testils")))]

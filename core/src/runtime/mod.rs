@@ -18,4 +18,4 @@
 
 mod core_map;
 
-pub use self::core_map::*;
+pub(crate) use self::core_map::*;
