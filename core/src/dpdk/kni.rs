@@ -18,10 +18,8 @@
 
 use super::{Mbuf, PortId};
 use crate::dpdk::DpdkError;
-use crate::ffi::{self, AsStr, ToResult};
+use crate::ffi::{self, ToResult};
 
-#[cfg(feature = "metrics")]
-use crate::metrics::{labels, Counter, SINK};
 use crate::net::MacAddr;
 use crate::{debug, error, warn};
 use anyhow::Result;
@@ -33,17 +31,6 @@ use std::ptr::{self, NonNull};
 use thiserror::Error;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-/// Creates a new KNI counter.
-#[cfg(feature = "metrics")]
-fn new_counter(name: &'static str, kni: &str, dir: &'static str) -> Counter {
-    SINK.scoped("kni").counter_with_labels(
-        name,
-        labels!(
-            "kni" => kni.to_string(),
-            "dir" => dir,
-        ),
-    )
-}
 
 /// The KNI receive handle. Because the underlying interface is single
 /// threaded, we must ensure that only one rx handle is created for each
@@ -51,29 +38,14 @@ fn new_counter(name: &'static str, kni: &str, dir: &'static str) -> Counter {
 #[allow(missing_debug_implementations)]
 pub struct KniRx {
     raw: NonNull<ffi::rte_kni>,
-    #[cfg(feature = "metrics")]
-    packets: Counter,
-    #[cfg(feature = "metrics")]
-    octets: Counter,
 }
 
 impl KniRx {
-    /// Creates a new `KniRx`.
-    #[cfg(not(feature = "metrics"))]
-    pub fn new(raw: NonNull<ffi::rte_kni>) -> Self {
-        KniRx { raw }
-    }
 
     /// Creates a new `KniRx`.
-    #[cfg(feature = "metrics")]
     pub fn new(raw: NonNull<ffi::rte_kni>) -> Self {
-        let name = unsafe { ffi::rte_kni_get_name(raw.as_ref()).as_str().to_owned() };
-        let packets = new_counter("packets", &name, "rx");
-        let octets = new_counter("octets", &name, "rx");
         KniRx {
             raw,
-            packets,
-            octets,
         }
     }
 

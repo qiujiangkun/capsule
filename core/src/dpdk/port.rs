@@ -32,9 +32,6 @@ use crate::ffi::ToCString;
 use crate::ffi::ToResult;
 use crate::ffi::{self};
 use crate::info;
-use crate::metrics::labels;
-use crate::metrics::Counter;
-use crate::metrics::SINK;
 use crate::net::MacAddr;
 #[cfg(feature = "pcap-dump")]
 use crate::pcap;
@@ -118,12 +115,6 @@ pub struct PortQueue {
     rxq: RxQueueIndex,
     txq: TxQueueIndex,
     kni: Option<KniTxQueue>,
-    #[cfg(feature = "metrics")]
-    received: Option<Counter>,
-    #[cfg(feature = "metrics")]
-    transmitted: Option<Counter>,
-    #[cfg(feature = "metrics")]
-    dropped: Option<Counter>,
     received_bufs: Vec<MaybeUninit<Mbuf>>,
     received_bufs_ptr: Vec<*mut ffi::rte_mbuf>,
     received_index_l: usize,
@@ -160,12 +151,6 @@ impl PortQueue {
             rxq,
             txq,
             kni: None,
-            #[cfg(feature = "metrics")]
-            received: None,
-            #[cfg(feature = "metrics")]
-            transmitted: None,
-            #[cfg(feature = "metrics")]
-            dropped: None,
             received_bufs: (0..Self::RX_BURST_MAX).map(|_| MaybeUninit::uninit()).collect(),
             received_bufs_ptr: vec![ptr::null_mut(); Self::RX_BURST_MAX],
             received_index_l: 0,
@@ -239,43 +224,6 @@ impl PortQueue {
 
     /// Sets the TX queue for the KNI interface.
     fn set_kni(&mut self, kni: KniTxQueue) { self.kni = Some(kni); }
-
-    /// Sets the per queue counters. Some device drivers don't track TX
-    /// and RX packets per queue. Instead we will track them here for all
-    /// devices. Additionally we also track the TX packet drops when the
-    /// TX queue is full.
-    #[cfg(feature = "metrics")]
-    fn set_counters(&mut self, port: &str, core_id: CoreId) {
-        let counter = SINK.scoped("port").counter_with_labels(
-            "packets",
-            labels!(
-                "port" => port.to_owned(),
-                "dir" => "rx",
-                "core" => core_id.0.to_string(),
-            ),
-        );
-        self.received = Some(counter);
-
-        let counter = SINK.scoped("port").counter_with_labels(
-            "packets",
-            labels!(
-                "port" => port.to_owned(),
-                "dir" => "tx",
-                "core" => core_id.0.to_string(),
-            ),
-        );
-        self.transmitted = Some(counter);
-
-        let counter = SINK.scoped("port").counter_with_labels(
-            "dropped",
-            labels!(
-                "port" => port.to_owned(),
-                "dir" => "tx",
-                "core" => core_id.0.to_string(),
-            ),
-        );
-        self.dropped = Some(counter);
-    }
 
     /// Returns the MAC address of the port.
     pub fn mac_addr(&self) -> MacAddr { super::eth_macaddr_get(self.port_id.0) }

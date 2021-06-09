@@ -121,14 +121,11 @@
 // alias for the macros
 extern crate self as capsule;
 
-pub mod batch;
+// pub mod batch;
 pub mod config;
 mod dpdk;
 pub mod ffi;
 mod macros;
-#[cfg(feature = "metrics")]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "default", feature = "metrics"))))]
-pub mod metrics;
 pub mod net;
 pub mod packets;
 #[cfg(feature = "pcap-dump")]
