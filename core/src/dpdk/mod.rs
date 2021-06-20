@@ -20,8 +20,6 @@ mod kni;
 mod mbuf;
 mod mempool;
 mod port;
-#[cfg(feature = "metrics")]
-mod stats;
 
 #[allow(unreachable_pub)] // https://github.com/rust-lang/rust/issues/57411
 pub use self::kni::*;
