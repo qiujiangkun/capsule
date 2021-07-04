@@ -119,7 +119,6 @@
 // alias for the macros
 extern crate self as capsule;
 
-// pub mod batch;
 pub mod config;
 mod dpdk;
 pub mod ffi;
