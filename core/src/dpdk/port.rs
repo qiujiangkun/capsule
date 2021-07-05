@@ -157,6 +157,7 @@ impl PortQueue {
             received_index_h: 0,
         }
     }
+    /// Gets the MTU of the interface
     pub fn get_mtu(&self) -> std::io::Result<u16> {
         let mut result = MaybeUninit::uninit();
         unsafe {
@@ -168,6 +169,18 @@ impl PortQueue {
             }
         }
     }
+    /// Sets the MTU of the interface
+    pub fn set_mtu(&mut self, mtu: u16) -> std::io::Result<()> {
+        unsafe {
+            let errno = ffi::rte_eth_dev_set_mtu(self.port_id.raw(), mtu);
+            if errno == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::from_raw_os_error(errno))
+            }
+        }
+    }
+
     /// Receives a burst of packets from the receive queue, up to a maximum
     /// of 32 packets.
     /// Returns one received frame and its ownership
